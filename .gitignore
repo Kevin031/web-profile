@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-renderer/
+release/
+src-tauri/target/
+.vite/
+coverage/
+.superpowers/
+*.log
+web-profile.config.json
