@@ -213,13 +213,15 @@ release/Web Profile-portable-x64/Web Profile.exe
 
 重新打包时，脚本会替换已有便携版目录；若该目录中的 Web Profile 正在运行，脚本会先结束该实例。
 
-### 5.3 构建便携版并创建桌面快捷方式
+### 5.3 构建便携版并添加到系统应用
 
 ```powershell
 npm run build:portable:desktop
 ```
 
-快捷方式名称包含当前版本号，例如 `Web Profile v0.1.3.lnk`。脚本只覆盖同名、同版本快捷方式，不会清理旧版本快捷方式。
+在 Windows 上，快捷方式名称包含当前版本号，例如 `Web Profile v0.1.3.lnk`。脚本只覆盖同名、同版本快捷方式，不会清理旧版本快捷方式。
+
+在 macOS 上，脚本会将 `Web Profile.app` 安装到 `/Applications`。若已安装旧版本，会由当前构建替换。
 
 ## 6. 配置、缓存与迁移
 

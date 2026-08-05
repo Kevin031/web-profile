@@ -2,7 +2,7 @@ export type ProjectRunState = 'idle' | 'starting' | 'running' | 'stopping' | 'ex
 
 export type GitWorkingTreeState = 'clean' | 'dirty' | 'unknown' | 'not-git';
 
-export type ProjectOpenTool = 'explorer' | 'vscode' | 'cursor' | 'terminal';
+export type ProjectOpenTool = 'explorer' | 'vscode' | 'cursor' | 'terminal' | 'iterm';
 
 export interface AppConfig {
   projectRoot: string;

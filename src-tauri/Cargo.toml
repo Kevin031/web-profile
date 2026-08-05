@@ -1,6 +1,6 @@
 [package]
 name = "web-profile"
-version = "0.1.2"
+version = "0.1.8"
 description = "本机前端项目桌面启动器"
 authors = []
 edition = "2021"

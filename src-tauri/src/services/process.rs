@@ -142,9 +142,20 @@ impl ProcessManager {
         )
         .await;
 
-        let mut command = Command::new("cmd.exe");
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/D", "/S", "/C", &command_line]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let mut command = Command::new(shell);
+            command.args(["-lc", &command_line]);
+            command
+        };
         command
-            .args(["/D", "/S", "/C", &command_line])
             .current_dir(&project.path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

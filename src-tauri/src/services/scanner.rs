@@ -106,25 +106,31 @@ impl ProjectScanner {
         let id = project_id_from_path(&normalized_path);
         let is_hidden = config.hidden_project_paths.contains(&normalized_path);
         let is_favorite = config.favorite_project_paths.contains(&normalized_path);
-        let start_command = config
-            .command_overrides
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_START_COMMAND.to_string());
-
         match self.read_package_info(&normalized_path).await {
-            Ok(package_info) => ProjectInfo {
-                id,
-                name: package_info.name.clone(),
-                path: normalized_path.clone(),
-                package_info: Some(package_info),
-                is_git_repository: self.is_git_repository(&normalized_path).await,
-                is_favorite,
-                is_hidden,
-                start_command,
-                error: None,
-            },
+            Ok(package_info) => {
+                let start_command = config
+                    .command_overrides
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| default_start_command(&package_info));
+                ProjectInfo {
+                    id,
+                    name: package_info.name.clone(),
+                    path: normalized_path.clone(),
+                    package_info: Some(package_info),
+                    is_git_repository: self.is_git_repository(&normalized_path).await,
+                    is_favorite,
+                    is_hidden,
+                    start_command,
+                    error: None,
+                }
+            }
             Err(error) => ProjectInfo {
+                start_command: config
+                    .command_overrides
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| DEFAULT_START_COMMAND.to_string()),
                 id,
                 name: Path::new(&normalized_path)
                     .file_name()
@@ -136,7 +142,6 @@ impl ProjectScanner {
                 is_git_repository: false,
                 is_favorite,
                 is_hidden,
-                start_command,
                 error: Some(error),
             },
         }
@@ -219,8 +224,39 @@ impl ProjectScanner {
             .command_overrides
             .get(&project.id)
             .cloned()
-            .unwrap_or_else(|| DEFAULT_START_COMMAND.to_string());
+            .unwrap_or_else(|| {
+                project
+                    .package_info
+                    .as_ref()
+                    .map(default_start_command)
+                    .unwrap_or_else(|| DEFAULT_START_COMMAND.to_string())
+            });
         project
+    }
+}
+
+fn default_start_command(package_info: &PackageInfo) -> String {
+    let script_name = ["dev", "start", "serve"]
+        .into_iter()
+        .find(|name| package_info.scripts.contains_key(*name))
+        .map(str::to_string)
+        .or_else(|| {
+            let mut dev_scripts = package_info
+                .scripts
+                .keys()
+                .filter(|name| name.starts_with("dev:"))
+                .cloned()
+                .collect::<Vec<_>>();
+            dev_scripts.sort();
+            dev_scripts.into_iter().next()
+        });
+
+    let Some(script_name) = script_name else {
+        return DEFAULT_START_COMMAND.to_string();
+    };
+    match package_info.package_manager.as_str() {
+        "pnpm" | "yarn" | "bun" => format!("{} {script_name}", package_info.package_manager),
+        _ => format!("npm run {script_name}"),
     }
 }
 
@@ -258,9 +294,45 @@ mod tests {
     use tempfile::tempdir;
     use tokio::sync::Semaphore;
 
-    use crate::models::{AppConfig, ProjectOpenTool};
+    use crate::models::{AppConfig, PackageInfo, ProjectOpenTool};
 
-    use super::ProjectScanner;
+    use super::{default_start_command, ProjectScanner};
+
+    #[test]
+    fn selects_a_start_script_fallback_when_dev_is_missing() {
+        for (scripts, manager, expected) in [
+            ([("start", "vite")].as_slice(), "npm", "npm run start"),
+            ([("serve", "vite")].as_slice(), "pnpm", "pnpm serve"),
+            ([("dev:web", "vite")].as_slice(), "yarn", "yarn dev:web"),
+        ] {
+            let package_info = PackageInfo {
+                name: "demo".to_string(),
+                scripts: scripts
+                    .iter()
+                    .map(|(name, command)| (name.to_string(), command.to_string()))
+                    .collect(),
+                package_manager: manager.to_string(),
+            };
+
+            assert_eq!(default_start_command(&package_info), expected);
+        }
+    }
+
+    #[test]
+    fn prefers_dev_over_other_start_scripts() {
+        let package_info = PackageInfo {
+            name: "demo".to_string(),
+            scripts: [
+                ("start".to_string(), "vite".to_string()),
+                ("dev".to_string(), "vite".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            package_manager: "pnpm".to_string(),
+        };
+
+        assert_eq!(default_start_command(&package_info), "pnpm dev");
+    }
 
     #[tokio::test]
     async fn scans_package_projects_and_detects_package_manager() {

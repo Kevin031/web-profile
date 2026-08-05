@@ -16,7 +16,9 @@ pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) 
             let scheme = match tool {
                 ProjectOpenTool::Vscode => "vscode",
                 ProjectOpenTool::Cursor => "cursor",
-                ProjectOpenTool::Explorer | ProjectOpenTool::Terminal => unreachable!(),
+                ProjectOpenTool::Explorer | ProjectOpenTool::Terminal | ProjectOpenTool::Iterm => {
+                    unreachable!()
+                }
             };
             app.opener()
                 .open_url(create_project_tool_url(scheme, project_path), None::<&str>)
@@ -27,12 +29,14 @@ pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) 
             .spawn()
             .map(|_| ())
             .map_err(|error| error.to_string()),
+        ProjectOpenTool::Iterm => open_iterm(project_path),
     };
     let label = match tool {
         ProjectOpenTool::Explorer => "资源管理器",
         ProjectOpenTool::Vscode => "VSCode",
         ProjectOpenTool::Cursor => "Cursor",
         ProjectOpenTool::Terminal => "Windows Terminal",
+        ProjectOpenTool::Iterm => "iTerm",
     };
 
     match result {
@@ -49,6 +53,20 @@ pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) 
             exit_code: None,
         },
     }
+}
+
+#[cfg(target_os = "macos")]
+fn open_iterm(project_path: &str) -> Result<(), String> {
+    Command::new("open")
+        .args(["-a", "iTerm", project_path])
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_iterm(_project_path: &str) -> Result<(), String> {
+    Err("iTerm 仅支持 macOS".to_string())
 }
 
 pub fn open_http_url(app: &AppHandle, url: &str) -> TaskResult {

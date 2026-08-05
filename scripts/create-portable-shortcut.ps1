@@ -1,3 +1,8 @@
+param(
+  [ValidateSet('x64', 'arm64')]
+  [string]$Architecture = 'x64'
+)
+
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -11,7 +16,7 @@ if ([string]::IsNullOrWhiteSpace($appVersion)) {
   throw "Application version not found: $packageJsonPath"
 }
 
-$portableDir = Join-Path $root "release\$appName-portable-x64"
+$portableDir = Join-Path $root "release\$appName-portable-$Architecture"
 $portableExe = Join-Path $portableDir "$appName.exe"
 $desktopDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Desktop)
 $shortcutPath = Join-Path $desktopDir "$appName v$appVersion.lnk"

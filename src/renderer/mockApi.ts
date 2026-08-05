@@ -196,7 +196,8 @@ export const createMockApi = (): AppApi => {
         explorer: '资源管理器',
         vscode: 'VSCode',
         cursor: 'Cursor',
-        terminal: 'Windows Terminal'
+        terminal: 'Windows Terminal',
+        iterm: 'iTerm'
       };
       return { ok: true, message: `Mock：已使用${toolLabel[tool]}打开 ${project.path}` };
     },

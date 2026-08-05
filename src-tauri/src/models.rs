@@ -15,6 +15,7 @@ pub enum ProjectOpenTool {
     Cursor,
     #[serde(alias = "powershell")]
     Terminal,
+    Iterm,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

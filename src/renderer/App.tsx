@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronDown,
+  Copy,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -9,6 +10,7 @@ import {
   LoaderCircle,
   Maximize2,
   Minus,
+  MoreHorizontal,
   Play,
   RefreshCw,
   RotateCcw,
@@ -16,7 +18,6 @@ import {
   Settings,
   Square,
   Star,
-  Terminal,
   Trash2,
   X
 } from 'lucide-react';
@@ -35,8 +36,10 @@ import type {
   ProjectProcessState
 } from '../shared/types';
 import { resolveAppApi } from './appApi';
+import appIcon from './assets/app-icon.svg';
 import cursorIcon from './assets/open-tools/cursor.ico';
 import explorerIcon from './assets/open-tools/explorer.svg';
+import itermIcon from './assets/open-tools/iterm.svg';
 import terminalIcon from './assets/open-tools/terminal.svg';
 import vscodeIcon from './assets/open-tools/vscode.ico';
 
@@ -60,14 +63,16 @@ const projectOpenToolLabels: Record<ProjectOpenTool, string> = {
   explorer: '资源管理器',
   vscode: 'VSCode',
   cursor: 'Cursor',
-  terminal: 'Terminal'
+  terminal: 'Terminal',
+  iterm: 'iTerm'
 };
 
 const projectOpenToolIcons: Record<ProjectOpenTool, string> = {
   explorer: explorerIcon,
   vscode: vscodeIcon,
   cursor: cursorIcon,
-  terminal: terminalIcon
+  terminal: terminalIcon,
+  iterm: itermIcon
 };
 
 const projectOpenTools = Object.keys(projectOpenToolLabels) as ProjectOpenTool[];
@@ -80,6 +85,7 @@ interface SearchField {
 export const App = (): ReactElement => {
   const api = useMemo(() => resolveAppApi(window.appApi), []);
   const isWebPreview = !window.appApi;
+  const isMacOS = useMemo(() => /Macintosh|Mac OS X/.test(window.navigator.userAgent), []);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [gitStatuses, setGitStatuses] = useState<Record<string, GitStatus>>({});
@@ -91,6 +97,7 @@ export const App = (): ReactElement => {
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [busyProjectId, setBusyProjectId] = useState<string>('');
+  const [startingProjectIds, setStartingProjectIds] = useState<Set<string>>(() => new Set());
   const [isStoppingAll, setIsStoppingAll] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [requiresProjectRoot, setRequiresProjectRoot] = useState(false);
@@ -108,6 +115,9 @@ export const App = (): ReactElement => {
     });
     const offState = api.onProcessState((state) => {
       setProcessStates((current) => ({ ...current, [state.projectId]: state }));
+      if (isProjectStartSettled(state)) {
+        setStartingProjectIds((current) => withoutProjectId(current, state.projectId));
+      }
     });
     const offLog = api.onProjectLog((entry) => {
       setLogs((current) => ({
@@ -276,10 +286,17 @@ export const App = (): ReactElement => {
   };
 
   const startProject = async (project: ProjectInfo): Promise<void> => {
-    await withBusy(project.id, async () => {
+    setStartingProjectIds((current) => withProjectId(current, project.id));
+    const succeeded = await withBusy(project.id, async () => {
       const state = await api.startProject(project.id);
       setProcessStates((current) => ({ ...current, [project.id]: state }));
+      if (isProjectStartSettled(state)) {
+        setStartingProjectIds((current) => withoutProjectId(current, project.id));
+      }
     });
+    if (!succeeded) {
+      setStartingProjectIds((current) => withoutProjectId(current, project.id));
+    }
   };
 
   const stopProject = async (project: ProjectInfo): Promise<void> => {
@@ -306,10 +323,17 @@ export const App = (): ReactElement => {
   };
 
   const restartProject = async (project: ProjectInfo): Promise<void> => {
-    await withBusy(project.id, async () => {
+    setStartingProjectIds((current) => withProjectId(current, project.id));
+    const succeeded = await withBusy(project.id, async () => {
       const state = await api.restartProject(project.id);
       setProcessStates((current) => ({ ...current, [project.id]: state }));
+      if (isProjectStartSettled(state)) {
+        setStartingProjectIds((current) => withoutProjectId(current, project.id));
+      }
     });
+    if (!succeeded) {
+      setStartingProjectIds((current) => withoutProjectId(current, project.id));
+    }
   };
 
   const openProjectUrl = async (project: ProjectInfo): Promise<void> => {
@@ -325,6 +349,15 @@ export const App = (): ReactElement => {
     try {
       const result = await api.openProject(project.id, config?.projectOpenTool ?? 'explorer');
       showToast(result.ok ? 'success' : 'error', result.message);
+    } catch (error) {
+      showToast('error', errorMessage(error));
+    }
+  };
+
+  const copyProjectPath = async (project: ProjectInfo): Promise<void> => {
+    try {
+      await copyText(project.path);
+      showToast('success', '项目路径已复制');
     } catch (error) {
       showToast('error', errorMessage(error));
     }
@@ -367,12 +400,19 @@ export const App = (): ReactElement => {
       ? `${packageManager} ${scriptName}`
       : `npm run ${scriptName}`;
 
-    await withBusy(project.id, async () => {
+    setStartingProjectIds((current) => withProjectId(current, project.id));
+    const succeeded = await withBusy(project.id, async () => {
       const nextProjects = await api.updateProjectConfig(project.id, { startCommand });
       setProjects(nextProjects);
       const state = await api.startProject(project.id);
       setProcessStates((current) => ({ ...current, [project.id]: state }));
+      if (isProjectStartSettled(state)) {
+        setStartingProjectIds((current) => withoutProjectId(current, project.id));
+      }
     });
+    if (!succeeded) {
+      setStartingProjectIds((current) => withoutProjectId(current, project.id));
+    }
   };
 
   const selectProjectRoot = async (): Promise<void> => {
@@ -413,12 +453,14 @@ export const App = (): ReactElement => {
     void selectProjectRoot();
   }, [config, requiresProjectRoot]);
 
-  const withBusy = async (projectId: string, action: () => Promise<void>): Promise<void> => {
+  const withBusy = async (projectId: string, action: () => Promise<void>): Promise<boolean> => {
     try {
       setBusyProjectId(projectId);
       await action();
+      return true;
     } catch (error) {
       showToast('error', errorMessage(error));
+      return false;
     } finally {
       setBusyProjectId('');
     }
@@ -430,8 +472,8 @@ export const App = (): ReactElement => {
   };
 
   return (
-    <main className="app-shell">
-      <WindowTitlebar isDesktop={!isWebPreview} />
+    <main className={`app-shell ${isMacOS ? 'is-macos' : ''}`}>
+      <WindowTitlebar isDesktop={!isWebPreview} isMacOS={isMacOS} />
 
       <aside className="sidebar">
         <div className="sidebar-main">
@@ -523,6 +565,7 @@ export const App = (): ReactElement => {
           gitStatuses={gitStatuses}
           loading={loading}
           processStates={processStates}
+          startingProjectIds={startingProjectIds}
           projects={visibleProjects}
           selectedProjectId={selectedProject?.id ?? ''}
           onCheckout={checkoutBranch}
@@ -549,6 +592,7 @@ export const App = (): ReactElement => {
             processState={processStates[selectedProject.id]}
             project={selectedProject}
             onCheckout={checkoutBranch}
+            onCopyPath={copyProjectPath}
             onHide={updateProjectHidden}
             onOpenProject={openProject}
             onOpenToolChange={updateProjectOpenTool}
@@ -588,9 +632,10 @@ export const App = (): ReactElement => {
 
 interface WindowTitlebarProps {
   isDesktop: boolean;
+  isMacOS: boolean;
 }
 
-const WindowTitlebar = ({ isDesktop }: WindowTitlebarProps): ReactElement => {
+const WindowTitlebar = ({ isDesktop, isMacOS }: WindowTitlebarProps): ReactElement => {
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -599,18 +644,22 @@ const WindowTitlebar = ({ isDesktop }: WindowTitlebarProps): ReactElement => {
     }
 
     const appWindow = getCurrentWindow();
-    const syncMaximizedState = async (): Promise<void> => {
+    const syncWindowState = async (): Promise<void> => {
       setIsMaximized(await appWindow.isMaximized());
     };
 
-    void syncMaximizedState();
-    const unlistenPromise = appWindow.onResized(syncMaximizedState);
+    void syncWindowState();
+    const unlistenPromise = appWindow.onResized(syncWindowState);
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [isDesktop]);
 
   const runWindowAction = async (action: () => Promise<void>): Promise<void> => {
+    if (!isDesktop) {
+      return;
+    }
+
     try {
       await action();
     } catch (error) {
@@ -629,13 +678,13 @@ const WindowTitlebar = ({ isDesktop }: WindowTitlebarProps): ReactElement => {
       {isDesktop ? <div className="window-drag-region" data-tauri-drag-region /> : null}
       <div className="titlebar-brand" aria-label="Web Profile">
         <div className="brand-mark">
-          <Terminal size={16} />
+          <img alt="" aria-hidden="true" src={appIcon} />
         </div>
         <strong>Web Profile</strong>
         <span>v{__APP_VERSION__}</span>
       </div>
       <div className="titlebar-caption">前端项目启动器</div>
-      {isDesktop ? (
+      {isDesktop && !isMacOS ? (
         <div className="window-controls">
           <button type="button" title="最小化" aria-label="最小化" onClick={() => void runWindowAction(() => getCurrentWindow().minimize())}>
             <Minus size={16} strokeWidth={1.7} />
@@ -717,6 +766,45 @@ const ProjectOpenToolIcon = ({ tool }: ProjectOpenToolIconProps): ReactElement =
   <img alt="" aria-hidden="true" src={projectOpenToolIcons[tool]} />
 );
 
+interface RowMoreActionsProps {
+  canPull: boolean;
+  canRestart: boolean;
+  disabled: boolean;
+  onPull: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onRestart: () => Promise<void>;
+}
+
+const RowMoreActions = ({ canPull, canRestart, disabled, onPull, onRefresh, onRestart }: RowMoreActionsProps): ReactElement => (
+  <div className="row-more-control" onClick={(event) => event.stopPropagation()}>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button type="button" title="更多操作" aria-label="更多操作" disabled={disabled}>
+          <MoreHorizontal size={16} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="row-more-menu" align="end" sideOffset={6}>
+          {canRestart ? (
+            <DropdownMenu.Item className="row-more-menu-item" onSelect={() => void onRestart()}>
+              <RotateCcw size={15} />
+              <span>重启项目</span>
+            </DropdownMenu.Item>
+          ) : null}
+          <DropdownMenu.Item className="row-more-menu-item" onSelect={() => void onRefresh()}>
+            <RefreshCw size={15} />
+            <span>刷新 Git 状态</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className="row-more-menu-item" disabled={!canPull} onSelect={() => void onPull()}>
+            <GitBranch size={15} />
+            <span>Pull</span>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  </div>
+);
+
 interface ProjectTableProps {
   busyProjectId: string;
   gitStatuses: Record<string, GitStatus>;
@@ -724,6 +812,7 @@ interface ProjectTableProps {
   processStates: Record<string, ProjectProcessState>;
   projects: ProjectInfo[];
   selectedProjectId: string;
+  startingProjectIds: Set<string>;
   openTool: ProjectOpenTool;
   onCheckout: (project: ProjectInfo, branchName: string) => Promise<void>;
   onPull: (project: ProjectInfo) => Promise<void>;
@@ -745,6 +834,7 @@ const ProjectTable = ({
   processStates,
   projects,
   selectedProjectId,
+  startingProjectIds,
   openTool,
   onPull,
   onRefreshGit,
@@ -803,6 +893,7 @@ const ProjectTable = ({
             const gitStatus = gitStatuses[project.id];
             const processState = processStates[project.id] ?? { projectId: project.id, state: 'idle' };
             const isBusy = busyProjectId === project.id;
+            const isStarting = startingProjectIds.has(project.id);
             return (
               <tr className={selectedProjectId === project.id ? 'selected' : ''} key={project.id} onClick={() => onSelect(project.id)}>
                 <td>
@@ -819,12 +910,12 @@ const ProjectTable = ({
                       {project.isFavorite ? <Star size={15} /> : <Heart size={15} />}
                     </button>
                     <div>
-                      <strong>{project.name}</strong>
-                      <span>{project.path}</span>
+                      <strong title={project.name}>{project.name}</strong>
+                      <span title={project.path}>{project.path}</span>
                     </div>
                   </div>
                 </td>
-                <td className="branch-cell">{gitStatus?.branch || '-'}</td>
+                <td className="branch-cell" title={gitStatus?.branch || ''}>{gitStatus?.branch || '-'}</td>
                 <td>
                   <GitBadge status={gitStatus} />
                 </td>
@@ -858,26 +949,32 @@ const ProjectTable = ({
                       onOpen={() => onOpenProject(project)}
                       onToolChange={onOpenToolChange}
                     />
-                    {processState.state === 'running' || processState.state === 'starting' ? (
-                      <>
-                        <button type="button" title="停止" disabled={isBusy} onClick={() => void onStop(project)}>
-                          <Square size={15} />
-                        </button>
-                        <button type="button" title="重启" disabled={isBusy} onClick={() => void onRestart(project)}>
-                          <RotateCcw size={15} />
-                        </button>
-                      </>
+                    {isStarting ? (
+                      <button
+                        type="button"
+                        title="项目启动中，点击停止"
+                        disabled={isBusy}
+                        onClick={() => void onStop(project)}
+                      >
+                        <LoaderCircle className="spin" size={15} />
+                      </button>
+                    ) : processState.state === 'running' || processState.state === 'starting' ? (
+                      <button type="button" title="停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                        <Square size={15} />
+                      </button>
                     ) : (
                       <button type="button" title="启动" disabled={isBusy} onClick={() => void onStart(project)}>
                         <Play size={15} />
                       </button>
                     )}
-                    <button type="button" title="刷新 Git" disabled={isBusy} onClick={() => void onRefreshGit(project)}>
-                      <RefreshCw size={15} />
-                    </button>
-                    <button type="button" title="Pull" disabled={isBusy || !project.isGitRepository} onClick={() => void onPull(project)}>
-                      <GitBranch size={15} />
-                    </button>
+                    <RowMoreActions
+                      canPull={project.isGitRepository}
+                      canRestart={processState.state === 'running' || processState.state === 'starting'}
+                      disabled={isBusy}
+                      onPull={() => onPull(project)}
+                      onRefresh={() => onRefreshGit(project)}
+                      onRestart={() => onRestart(project)}
+                    />
                   </div>
                 </td>
               </tr>
@@ -897,6 +994,7 @@ interface ProjectDetailsProps {
   project: ProjectInfo;
   openTool: ProjectOpenTool;
   onCheckout: (project: ProjectInfo, branchName: string) => Promise<void>;
+  onCopyPath: (project: ProjectInfo) => Promise<void>;
   onHide: (project: ProjectInfo, hidden: boolean) => Promise<void>;
   onOpenProject: (project: ProjectInfo) => Promise<void>;
   onOpenToolChange: (tool: ProjectOpenTool) => Promise<void>;
@@ -913,6 +1011,7 @@ const ProjectDetails = ({
   project,
   openTool,
   onCheckout,
+  onCopyPath,
   onHide,
   onOpenProject,
   onOpenToolChange,
@@ -932,7 +1031,18 @@ const ProjectDetails = ({
       <header>
         <div>
           <h2>{project.name}</h2>
-          <p>{project.path}</p>
+          <div className="detail-path">
+            <p title={project.path}>{project.path}</p>
+            <button
+              className="detail-path-copy"
+              type="button"
+              title="复制项目路径"
+              aria-label="复制项目路径"
+              onClick={() => void onCopyPath(project)}
+            >
+              <Copy size={14} />
+            </button>
+          </div>
         </div>
         <div className="details-header-actions">
           <ProjectOpenControl
@@ -1077,6 +1187,47 @@ const gitLabel = (status: GitStatus): string => {
 };
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '操作失败');
+
+const isProjectStartSettled = (state: ProjectProcessState): boolean =>
+  Boolean(state.url) || ['failed', 'exited', 'idle', 'stopping'].includes(state.state);
+
+const withProjectId = (projectIds: Set<string>, projectId: string): Set<string> => {
+  const next = new Set(projectIds);
+  next.add(projectId);
+  return next;
+};
+
+const withoutProjectId = (projectIds: Set<string>, projectId: string): Set<string> => {
+  if (!projectIds.has(projectId)) {
+    return projectIds;
+  }
+  const next = new Set(projectIds);
+  next.delete(projectId);
+  return next;
+};
+
+const copyText = async (text: string): Promise<void> => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 某些 WebView 未授予 Clipboard API 权限，继续使用兼容方案。
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) {
+    throw new Error('复制项目路径失败');
+  }
+};
 
 function getProjectSearchRank(
   project: ProjectInfo,
