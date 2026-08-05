@@ -4,6 +4,8 @@ export type GitWorkingTreeState = 'clean' | 'dirty' | 'unknown' | 'not-git';
 
 export type ProjectOpenTool = 'explorer' | 'vscode' | 'cursor' | 'terminal' | 'iterm';
 
+export type ProjectViewMode = 'table' | 'grid';
+
 export interface AppConfig {
   projectRoot: string;
   manualProjectPaths: string[];
@@ -11,6 +13,7 @@ export interface AppConfig {
   favoriteProjectPaths: string[];
   commandOverrides: Record<string, string>;
   projectOpenTool: ProjectOpenTool;
+  projectViewMode: ProjectViewMode;
   logLineLimit: number;
   scanOnStartup: boolean;
 }

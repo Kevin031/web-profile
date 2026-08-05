@@ -294,7 +294,7 @@ mod tests {
     use tempfile::tempdir;
     use tokio::sync::Semaphore;
 
-    use crate::models::{AppConfig, PackageInfo, ProjectOpenTool};
+    use crate::models::{AppConfig, PackageInfo, ProjectOpenTool, ProjectViewMode};
 
     use super::{default_start_command, ProjectScanner};
 
@@ -353,6 +353,7 @@ mod tests {
             favorite_project_paths: Vec::new(),
             command_overrides: HashMap::new(),
             project_open_tool: ProjectOpenTool::Explorer,
+            project_view_mode: ProjectViewMode::Table,
             log_line_limit: 500,
             scan_on_startup: true,
         };

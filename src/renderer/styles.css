@@ -639,6 +639,42 @@ select {
   gap: 8px;
 }
 
+.view-mode-switch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.view-mode-switch button {
+  display: inline-flex;
+  width: 32px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.view-mode-switch button + button {
+  border-left: 1px solid var(--hairline);
+}
+
+.view-mode-switch button:hover:not(:disabled) {
+  border-color: var(--hairline);
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.view-mode-switch button.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
 .stop-all-button {
   display: inline-flex;
   height: 32px;
@@ -893,6 +929,7 @@ select {
 }
 
 .table-wrap::-webkit-scrollbar,
+.project-grid-wrap::-webkit-scrollbar,
 .detail-panel::-webkit-scrollbar,
 .script-list::-webkit-scrollbar,
 .logs::-webkit-scrollbar {
@@ -901,6 +938,7 @@ select {
 }
 
 .table-wrap::-webkit-scrollbar-thumb,
+.project-grid-wrap::-webkit-scrollbar-thumb,
 .detail-panel::-webkit-scrollbar-thumb,
 .script-list::-webkit-scrollbar-thumb,
 .logs::-webkit-scrollbar-thumb {
@@ -908,6 +946,199 @@ select {
   border-radius: var(--radius-full);
   background: var(--faint);
   background-clip: padding-box;
+}
+
+.project-grid-wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 16px 16px;
+  overflow: auto;
+  scrollbar-color: var(--faint) transparent;
+  scrollbar-width: thin;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  align-content: start;
+  gap: 12px;
+}
+
+.project-card {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.project-card:hover,
+.project-card:focus-visible {
+  border-color: var(--hairline-strong);
+  background: #fbfcfd;
+  box-shadow: var(--shadow-soft);
+}
+
+.project-card.selected {
+  border-color: rgb(0 117 222 / 46%);
+  background: var(--primary-soft);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.project-card-header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-card-title {
+  min-width: 0;
+}
+
+.project-card-title strong,
+.project-card-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-title strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.project-card-title span,
+.project-card-meta span,
+.project-card-url > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.project-card-title span {
+  margin-top: 3px;
+}
+
+.project-card-meta {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
+}
+
+.project-card-meta > div {
+  min-width: 0;
+}
+
+.project-card-meta > div > span:first-child {
+  display: block;
+}
+
+.project-card-meta strong,
+.project-card-meta code {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-meta .badge {
+  margin-top: 3px;
+}
+
+.project-card-command {
+  grid-column: 1 / -1;
+}
+
+.project-card-command code {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgb(104 112 120 / 8%);
+  font-family: var(--font-mono-ui);
+  font-weight: 400;
+}
+
+.project-card-url {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+
+.project-card-url button {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid rgb(0 117 222 / 18%);
+  border-radius: var(--radius-sm);
+  background: rgb(0 117 222 / 5%);
+  color: var(--primary);
+  font-size: 12px;
+}
+
+.project-card-url button:hover:not(:disabled) {
+  border-color: rgb(0 117 222 / 32%);
+  background: rgb(0 117 222 / 9%);
+  color: var(--primary-active);
+}
+
+.project-card-url button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-url button svg {
+  flex: 0 0 auto;
+}
+
+.project-card-url > strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.project-card-actions > button,
+.project-card-actions .row-more-control > button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius-md);
 }
 
 table {
@@ -1550,6 +1781,10 @@ tbody tr.selected:hover td {
     margin: 0 14px 14px;
   }
 
+  .project-grid-wrap {
+    margin: 0 14px 14px;
+  }
+
   .table-wrap table {
     width: 100%;
     min-width: 900px;
@@ -1665,6 +1900,31 @@ tbody tr.selected:hover td {
 }
 
 @media (max-width: 1080px) {
+  .details {
+    height: auto;
+    overflow: visible;
+  }
+
+  .details-body {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+  }
+
+  .details-summary {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .details .log-section {
+    min-height: 220px;
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .logs {
+    height: 220px;
+  }
+
   .table-wrap table {
     min-width: 760px;
   }
@@ -1763,6 +2023,10 @@ tbody tr.selected:hover td {
     margin: 0 12px 12px;
   }
 
+  .project-grid-wrap {
+    margin: 0 12px 12px;
+  }
+
   .table-wrap table {
     width: 100%;
     min-width: 760px;
@@ -1841,6 +2105,10 @@ tbody tr.selected:hover td {
 
   .toolbar-actions {
     flex: 0 0 auto;
+  }
+
+  .project-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .table-wrap table {

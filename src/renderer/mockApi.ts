@@ -23,6 +23,7 @@ const mockConfig: AppConfig = {
   favoriteProjectPaths: ['D:/Projects/h5-vue3-tpl', 'D:/Projects/baioo-user-web'],
   commandOverrides: {},
   projectOpenTool: 'explorer',
+  projectViewMode: 'table',
   logLineLimit: 500,
   scanOnStartup: true
 };

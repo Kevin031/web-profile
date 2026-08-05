@@ -129,7 +129,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::models::{AppConfigUpdate, ProjectOpenTool};
+    use crate::models::{AppConfigUpdate, ProjectOpenTool, ProjectViewMode};
 
     use super::{normalize_project_path, parse_config, ConfigStore};
 
@@ -166,6 +166,7 @@ mod tests {
         let config = store.get().await.expect("应迁移旧配置");
 
         assert_eq!(config.project_open_tool, ProjectOpenTool::Explorer);
+        assert_eq!(config.project_view_mode, ProjectViewMode::Table);
         assert_eq!(config.favorite_project_paths, vec!["D:/Projects/demo"]);
         assert!(config_path.exists());
         assert!(legacy_path.exists());
@@ -204,5 +205,27 @@ mod tests {
             .await
             .expect("应重新读取配置");
         assert_eq!(reloaded.project_root, normalize_project_path(selected_root));
+    }
+
+    #[tokio::test]
+    async fn persists_an_updated_project_view_mode() {
+        let temp = tempdir().expect("应创建临时目录");
+        let config_path = temp.path().join("config/web-profile.config.json");
+        let legacy_path = temp.path().join("legacy.json");
+        let store = ConfigStore::new(config_path.clone(), legacy_path.clone());
+
+        store
+            .update(AppConfigUpdate {
+                project_view_mode: Some(ProjectViewMode::Grid),
+                ..AppConfigUpdate::default()
+            })
+            .await
+            .expect("应更新项目视图模式");
+
+        let reloaded = ConfigStore::new(config_path, legacy_path)
+            .get()
+            .await
+            .expect("应重新读取配置");
+        assert_eq!(reloaded.project_view_mode, ProjectViewMode::Grid);
     }
 }

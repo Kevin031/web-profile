@@ -16,6 +16,7 @@ describe('Tauri AppApi adapter', () => {
 
     const result = await api.checkoutBranch('demo', 'release');
     await api.openProject('demo', 'vscode');
+    await api.updateAppConfig({ projectViewMode: 'grid' });
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'checkout_branch', {
       projectId: 'demo',
@@ -24,6 +25,9 @@ describe('Tauri AppApi adapter', () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, 'open_project', {
       projectId: 'demo',
       tool: 'vscode'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'update_app_config', {
+      patch: { projectViewMode: 'grid' }
     });
     expect(result).toEqual({ ok: true, message: 'ok' });
   });

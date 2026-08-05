@@ -18,6 +18,14 @@ pub enum ProjectOpenTool {
     Iterm,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectViewMode {
+    #[default]
+    Table,
+    Grid,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -27,6 +35,7 @@ pub struct AppConfig {
     pub favorite_project_paths: Vec<String>,
     pub command_overrides: HashMap<String, String>,
     pub project_open_tool: ProjectOpenTool,
+    pub project_view_mode: ProjectViewMode,
     pub log_line_limit: usize,
     pub scan_on_startup: bool,
 }
@@ -40,6 +49,7 @@ impl Default for AppConfig {
             favorite_project_paths: Vec::new(),
             command_overrides: HashMap::new(),
             project_open_tool: ProjectOpenTool::Explorer,
+            project_view_mode: ProjectViewMode::Table,
             log_line_limit: DEFAULT_LOG_LINE_LIMIT,
             scan_on_startup: true,
         }
@@ -55,6 +65,7 @@ pub struct AppConfigUpdate {
     pub favorite_project_paths: Option<Vec<String>>,
     pub command_overrides: Option<HashMap<String, String>>,
     pub project_open_tool: Option<ProjectOpenTool>,
+    pub project_view_mode: Option<ProjectViewMode>,
     pub log_line_limit: Option<usize>,
     pub scan_on_startup: Option<bool>,
 }
@@ -78,6 +89,7 @@ impl AppConfig {
                 .command_overrides
                 .unwrap_or_else(|| self.command_overrides.clone()),
             project_open_tool: update.project_open_tool.unwrap_or(self.project_open_tool),
+            project_view_mode: update.project_view_mode.unwrap_or(self.project_view_mode),
             log_line_limit: update.log_line_limit.unwrap_or(self.log_line_limit),
             scan_on_startup: update.scan_on_startup.unwrap_or(self.scan_on_startup),
         }

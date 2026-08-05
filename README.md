@@ -82,6 +82,7 @@ D:/Projects/
 - 在左侧搜索框中按项目名称或路径搜索。
 - 使用“全部、收藏、运行中、有改动、隐藏”筛选项目。
 - 点击项目前的收藏按钮可置顶项目。
+- 使用工作台右上角的视图按钮切换表格或网格展示；应用会记住当前选择。
 - 点击顶部刷新按钮重新扫描根目录并更新项目列表。
 
 ### 3.2 启动项目
@@ -227,7 +228,7 @@ npm run build:portable:desktop
 
 | 数据 | 路径 | 说明 |
 | --- | --- | --- |
-| 应用配置 | `%APPDATA%/com.webprofile.app/web-profile.config.json` | 根目录、收藏、隐藏、启动命令和默认打开工具 |
+| 应用配置 | `%APPDATA%/com.webprofile.app/web-profile.config.json` | 根目录、收藏、隐藏、启动命令、默认打开工具和工作台视图 |
 | 扫描缓存 | `%LOCALAPPDATA%/com.webprofile.app/web-profile.projects.cache.json` | 加快项目列表加载，可删除后重新扫描 |
 | 旧版 Electron 配置 | `%APPDATA%/web-profile/web-profile.config.json` | 仅在新配置不存在时自动导入一次 |
 

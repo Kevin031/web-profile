@@ -6,6 +6,7 @@ import {
   FolderOpen,
   GitBranch,
   Heart,
+  LayoutGrid,
   ListFilter,
   LoaderCircle,
   Maximize2,
@@ -18,6 +19,7 @@ import {
   Settings,
   Square,
   Star,
+  Table2,
   Trash2,
   X
 } from 'lucide-react';
@@ -33,7 +35,8 @@ import type {
   ProjectInfo,
   ProjectLogEntry,
   ProjectOpenTool,
-  ProjectProcessState
+  ProjectProcessState,
+  ProjectViewMode
 } from '../shared/types';
 import { resolveAppApi } from './appApi';
 import appIcon from './assets/app-icon.svg';
@@ -378,6 +381,21 @@ export const App = (): ReactElement => {
     }
   };
 
+  const updateProjectViewMode = async (projectViewMode: ProjectViewMode): Promise<void> => {
+    if (!config || config.projectViewMode === projectViewMode) {
+      return;
+    }
+
+    const previousConfig = config;
+    setConfig({ ...config, projectViewMode });
+    try {
+      setConfig(await api.updateAppConfig({ projectViewMode }));
+    } catch (error) {
+      setConfig(previousConfig);
+      showToast('error', errorMessage(error));
+    }
+  };
+
   const updateProjectFavorite = async (project: ProjectInfo, favorite: boolean): Promise<void> => {
     const nextProjects = await api.updateProjectConfig(project.id, { favorite });
     setProjects(nextProjects);
@@ -534,6 +552,28 @@ export const App = (): ReactElement => {
             <p>{visibleProjects.length} / {projects.length} 个项目</p>
           </div>
           <div className="toolbar-actions">
+            <div className="view-mode-switch" aria-label="项目展示方式" role="group">
+              <button
+                className={config?.projectViewMode !== 'grid' ? 'active' : ''}
+                type="button"
+                title="表格视图"
+                aria-label="表格视图"
+                aria-pressed={config?.projectViewMode !== 'grid'}
+                onClick={() => void updateProjectViewMode('table')}
+              >
+                <Table2 size={16} />
+              </button>
+              <button
+                className={config?.projectViewMode === 'grid' ? 'active' : ''}
+                type="button"
+                title="网格视图"
+                aria-label="网格视图"
+                aria-pressed={config?.projectViewMode === 'grid'}
+                onClick={() => void updateProjectViewMode('grid')}
+              >
+                <LayoutGrid size={16} />
+              </button>
+            </div>
             <button
               className="stop-all-button"
               type="button"
@@ -560,7 +600,26 @@ export const App = (): ReactElement => {
           </div>
         </header>
 
-        <ProjectTable
+        {config?.projectViewMode === 'grid' ? <ProjectGrid
+          busyProjectId={busyProjectId}
+          gitStatuses={gitStatuses}
+          loading={loading}
+          processStates={processStates}
+          startingProjectIds={startingProjectIds}
+          projects={visibleProjects}
+          selectedProjectId={selectedProject?.id ?? ''}
+          onPull={pullProject}
+          onRefreshGit={refreshGit}
+          onRestart={restartProject}
+          onSelect={setSelectedProjectId}
+          onOpenProject={openProject}
+          onOpenToolChange={updateProjectOpenTool}
+          onOpenUrl={openProjectUrl}
+          onStart={startProject}
+          onStop={stopProject}
+          onToggleFavorite={updateProjectFavorite}
+          openTool={config?.projectOpenTool ?? 'explorer'}
+        /> : <ProjectTable
           busyProjectId={busyProjectId}
           gitStatuses={gitStatuses}
           loading={loading}
@@ -580,7 +639,7 @@ export const App = (): ReactElement => {
           onStop={stopProject}
           onToggleFavorite={updateProjectFavorite}
           openTool={config?.projectOpenTool ?? 'explorer'}
-        />
+        />}
       </section>
 
       <aside className="detail-panel">
@@ -982,6 +1041,159 @@ const ProjectTable = ({
           })}
         </tbody>
       </table>
+    </div>
+  );
+};
+
+type ProjectGridProps = Omit<ProjectTableProps, 'onCheckout'>;
+
+const ProjectGrid = ({
+  busyProjectId,
+  gitStatuses,
+  loading,
+  processStates,
+  projects,
+  selectedProjectId,
+  startingProjectIds,
+  openTool,
+  onPull,
+  onRefreshGit,
+  onRestart,
+  onSelect,
+  onOpenProject,
+  onOpenToolChange,
+  onOpenUrl,
+  onStart,
+  onStop,
+  onToggleFavorite
+}: ProjectGridProps): ReactElement => {
+  if (loading) {
+    return (
+      <div className="loading-state">
+        <LoaderCircle className="spin" size={22} />
+        <span>加载中</span>
+      </div>
+    );
+  }
+
+  if (projects.length === 0) {
+    return (
+      <div className="empty-state">
+        <Search size={24} />
+        <p>没有匹配项目</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="project-grid-wrap">
+      <div className="project-grid">
+        {projects.map((project) => {
+          const gitStatus = gitStatuses[project.id];
+          const processState = processStates[project.id] ?? { projectId: project.id, state: 'idle' };
+          const isBusy = busyProjectId === project.id;
+          const isStarting = startingProjectIds.has(project.id);
+          const isRunning = processState.state === 'running' || processState.state === 'starting';
+
+          return (
+            <article
+              className={`project-card ${selectedProjectId === project.id ? 'selected' : ''}`}
+              key={project.id}
+              tabIndex={0}
+              onClick={() => onSelect(project.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelect(project.id);
+                }
+              }}
+            >
+              <header className="project-card-header">
+                <button
+                  className={`favorite-button ${project.isFavorite ? 'is-favorite' : ''}`}
+                  type="button"
+                  title={project.isFavorite ? '取消收藏' : '收藏'}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onToggleFavorite(project, !project.isFavorite);
+                  }}
+                >
+                  {project.isFavorite ? <Star size={15} /> : <Heart size={15} />}
+                </button>
+                <div className="project-card-title">
+                  <strong title={project.name}>{project.name}</strong>
+                  <span title={project.path}>{project.path}</span>
+                </div>
+                <RunBadge state={processState} />
+              </header>
+
+              <div className="project-card-meta">
+                <div>
+                  <span>分支</span>
+                  <strong title={gitStatus?.branch || ''}>{gitStatus?.branch || '-'}</strong>
+                </div>
+                <div>
+                  <span>Git</span>
+                  <GitBadge status={gitStatus} />
+                </div>
+                <div className="project-card-command">
+                  <span>启动命令</span>
+                  <code title={project.startCommand}>{project.startCommand}</code>
+                </div>
+              </div>
+
+              <div className="project-card-url">
+                <span>URL</span>
+                {processState.url ? (
+                  <button
+                    type="button"
+                    title="用浏览器打开"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onOpenUrl(project);
+                    }}
+                  >
+                    <span>{processState.url}</span>
+                    <ExternalLink size={13} />
+                  </button>
+                ) : (
+                  <strong>-</strong>
+                )}
+              </div>
+
+              <footer className="project-card-actions" onClick={(event) => event.stopPropagation()}>
+                <ProjectOpenControl
+                  disabled={isBusy}
+                  tool={openTool}
+                  onOpen={() => onOpenProject(project)}
+                  onToolChange={onOpenToolChange}
+                />
+                {isStarting ? (
+                  <button type="button" title="项目启动中，点击停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                    <LoaderCircle className="spin" size={15} />
+                  </button>
+                ) : isRunning ? (
+                  <button type="button" title="停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                    <Square size={15} />
+                  </button>
+                ) : (
+                  <button type="button" title="启动" disabled={isBusy} onClick={() => void onStart(project)}>
+                    <Play size={15} />
+                  </button>
+                )}
+                <RowMoreActions
+                  canPull={project.isGitRepository}
+                  canRestart={isRunning}
+                  disabled={isBusy}
+                  onPull={() => onPull(project)}
+                  onRefresh={() => onRefreshGit(project)}
+                  onRestart={() => onRestart(project)}
+                />
+              </footer>
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 };
