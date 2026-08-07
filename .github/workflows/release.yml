@@ -50,7 +50,7 @@ jobs:
               update-platform.txt
           - name: macOS
             os: macos-latest
-            bundle: dmg
+            bundle: app,dmg
             update-platform: darwin-aarch64
             artifact: macos-installer
             artifact-path: |
@@ -97,6 +97,15 @@ jobs:
       - name: 写入更新平台标识
         shell: bash
         run: echo '${{ matrix.update-platform }}' > update-platform.txt
+
+      - name: 校验更新签名产物
+        shell: bash
+        run: |
+          if [[ '${{ runner.os }}' == 'Windows' ]]; then
+            compgen -G 'src-tauri/target/release/bundle/nsis/*.exe.sig' > /dev/null
+          else
+            compgen -G 'src-tauri/target/release/bundle/macos/*.app.tar.gz.sig' > /dev/null
+          fi
 
       - name: 上传安装包
         uses: actions/upload-artifact@v7
