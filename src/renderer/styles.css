@@ -390,6 +390,31 @@ select {
   white-space: nowrap;
 }
 
+.update-button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #b8dfd8;
+  border-radius: var(--radius-md);
+  background: #effaf7;
+  color: #17675c;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.update-button:hover:not(:disabled) {
+  border-color: var(--accent-teal);
+  background: #e4f7f2;
+}
+
+.update-button:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
 .search-box {
   display: flex;
   align-items: center;

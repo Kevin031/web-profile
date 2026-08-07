@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import process from 'node:process';
 
 const rootDirectory = resolve(import.meta.dirname, '..');
 
@@ -43,7 +44,11 @@ if (typeof currentVersion !== 'string') {
   throw new Error('package.json 中缺少有效的 version 字段');
 }
 
-const nextVersion = incrementPatchVersion(currentVersion);
+const requestedVersion = process.env.APP_VERSION;
+if (requestedVersion !== undefined && !/^\d+\.\d+\.\d+$/.test(requestedVersion)) {
+  throw new Error(`APP_VERSION 不是有效的语义化版本号: ${requestedVersion}`);
+}
+const nextVersion = requestedVersion ?? incrementPatchVersion(currentVersion);
 packageJson.version = nextVersion;
 
 const packageLock = await readJson('package-lock.json');
@@ -61,13 +66,11 @@ tauriConfig.version = nextVersion;
 
 const cargoPath = resolve(rootDirectory, 'src-tauri/Cargo.toml');
 const cargoToml = await readFile(cargoPath, 'utf8');
-const nextCargoToml = cargoToml.replace(
-  /(^\[package\][\s\S]*?^version\s*=\s*")[^"]+("\s*$)/m,
-  `$1${nextVersion}$2`
-);
-if (nextCargoToml === cargoToml) {
+const cargoVersionPattern = /(^\[package\][\s\S]*?^version\s*=\s*")[^"]+("\s*$)/m;
+if (!cargoVersionPattern.test(cargoToml)) {
   throw new Error('未能更新 src-tauri/Cargo.toml 中的 package.version');
 }
+const nextCargoToml = cargoToml.replace(cargoVersionPattern, `$1${nextVersion}$2`);
 
 await Promise.all([
   writeJson('package.json', packageJson),

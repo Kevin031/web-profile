@@ -21,10 +21,13 @@ import {
   Star,
   Table2,
   Trash2,
+  Download,
   X
 } from 'lucide-react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
@@ -105,6 +108,9 @@ export const App = (): ReactElement => {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [requiresProjectRoot, setRequiresProjectRoot] = useState(false);
   const [isSelectingProjectRoot, setIsSelectingProjectRoot] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const promptedForProjectRootRef = useRef(false);
 
@@ -137,6 +143,29 @@ export const App = (): ReactElement => {
       offLog();
     };
   }, [api]);
+
+  useEffect(() => {
+    if (isWebPreview) {
+      return undefined;
+    }
+
+    let disposed = false;
+    void check()
+      .then((update) => {
+        if (disposed) {
+          void update?.close();
+          return;
+        }
+        setAvailableUpdate(update);
+      })
+      .catch((error: unknown) => {
+        console.error('[updater:check]', error);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [isWebPreview]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? projects[0],
@@ -509,6 +538,37 @@ export const App = (): ReactElement => {
     window.setTimeout(() => setToast(null), 3200);
   };
 
+  const installAvailableUpdate = async (): Promise<void> => {
+    if (!availableUpdate || isInstallingUpdate) {
+      return;
+    }
+
+    try {
+      setIsInstallingUpdate(true);
+      setUpdateProgress(0);
+      let downloadedBytes = 0;
+      let contentLength = 0;
+      const onDownloadEvent = (event: DownloadEvent): void => {
+        if (event.event === 'Started') {
+          contentLength = event.data.contentLength ?? 0;
+        } else if (event.event === 'Progress') {
+          downloadedBytes += event.data.chunkLength;
+          if (contentLength > 0) {
+            setUpdateProgress(Math.min(100, Math.round((downloadedBytes / contentLength) * 100)));
+          }
+        } else {
+          setUpdateProgress(100);
+        }
+      };
+      await availableUpdate.downloadAndInstall(onDownloadEvent);
+      await relaunch();
+    } catch (error) {
+      setIsInstallingUpdate(false);
+      setUpdateProgress(null);
+      showToast('error', `更新失败：${errorMessage(error)}`);
+    }
+  };
+
   return (
     <main className={`app-shell ${isMacOS ? 'is-macos' : ''}`}>
       <WindowTitlebar isDesktop={!isWebPreview} isMacOS={isMacOS} />
@@ -572,6 +632,18 @@ export const App = (): ReactElement => {
             <p>{visibleProjects.length} / {projects.length} 个项目</p>
           </div>
           <div className="toolbar-actions">
+            {availableUpdate ? (
+              <button
+                className="update-button"
+                type="button"
+                disabled={isInstallingUpdate}
+                title={`下载并安装 Web Profile ${availableUpdate.version}`}
+                onClick={() => void installAvailableUpdate()}
+              >
+                {isInstallingUpdate ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+                <span>{isInstallingUpdate ? `更新中 ${updateProgress ?? 0}%` : `更新至 v${availableUpdate.version}`}</span>
+              </button>
+            ) : null}
             <div className="view-mode-switch" aria-label="项目展示方式" role="group">
               <button
                 className={config?.projectViewMode !== 'grid' ? 'active' : ''}

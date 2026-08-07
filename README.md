@@ -227,6 +227,12 @@ npm run build:portable:desktop
 
 在 macOS 上，脚本会将 `Web Profile.app` 安装到 `/Applications`。若已安装旧版本，会由当前构建替换。
 
+### 5.4 GitHub Release 自动更新
+
+桌面应用启动后只请求 GitHub Release 中的 `latest.json` 检查版本，不会自动下载安装包。发现新版本时，工作台顶部会显示更新按钮；只有用户点击后才下载、验证签名、安装并重启应用。
+
+发布工作流要求仓库 Actions Secret 中存在 `TAURI_SIGNING_PRIVATE_KEY`。对应公钥已写入 `src-tauri/tauri.conf.json`，私钥必须在仓库外安全备份，不能提交到 Git。每次发布会生成 Windows、macOS 更新包及签名，并将平台下载地址写入 `latest.json`。
+
 ## 6. 配置、缓存与迁移
 
 | 数据 | 路径 | 说明 |
