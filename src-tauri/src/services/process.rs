@@ -29,6 +29,7 @@ use crate::{
     },
 };
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 type EventEmitter = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -39,7 +40,9 @@ struct ProcessRecord {
 }
 
 pub struct ProcessManager {
+    /// 以 runId 为键的进程记录
     processes: Mutex<HashMap<String, ProcessRecord>>,
+    /// 以 runId 为键的日志缓冲
     logs: Mutex<HashMap<String, Vec<ProjectLogEntry>>>,
     generation: AtomicU64,
     log_line_limit: AtomicUsize,
@@ -62,13 +65,17 @@ impl ProcessManager {
             .store(limit.clamp(1, 10_000), Ordering::Relaxed);
     }
 
-    pub async fn get_state(&self, project_id: &str) -> ProjectProcessState {
+    pub async fn get_state(&self, run_id: &str) -> ProjectProcessState {
         self.processes
             .lock()
             .await
-            .get(project_id)
+            .get(run_id)
             .map(|record| record.state.clone())
-            .unwrap_or_else(|| ProjectProcessState::idle(project_id))
+            .unwrap_or_else(|| {
+                let mut idle = ProjectProcessState::idle("");
+                idle.run_id = run_id.to_string();
+                idle
+            })
     }
 
     pub async fn get_all_states(&self) -> HashMap<String, ProjectProcessState> {
@@ -76,15 +83,15 @@ impl ProcessManager {
             .lock()
             .await
             .iter()
-            .map(|(project_id, record)| (project_id.clone(), record.state.clone()))
+            .map(|(run_id, record)| (run_id.clone(), record.state.clone()))
             .collect()
     }
 
-    pub async fn get_logs(&self, project_id: &str) -> Vec<ProjectLogEntry> {
+    pub async fn get_logs(&self, run_id: &str) -> Vec<ProjectLogEntry> {
         self.logs
             .lock()
             .await
-            .get(project_id)
+            .get(run_id)
             .cloned()
             .unwrap_or_default()
     }
@@ -98,16 +105,49 @@ impl ProcessManager {
         })
     }
 
-    pub async fn start(self: &Arc<Self>, project: &ProjectInfo) -> ProjectProcessState {
-        if let Some(existing) = self.processes.lock().await.get(&project.id) {
-            if matches!(existing.state.state.as_str(), "starting" | "running") {
-                return existing.state.clone();
+    /// 查找同项目下相同命令且仍在启动/运行中的 run
+    async fn find_active_run_by_command(
+        &self,
+        project_id: &str,
+        command: &str,
+    ) -> Option<ProjectProcessState> {
+        self.processes
+            .lock()
+            .await
+            .values()
+            .find(|record| {
+                record.state.project_id == project_id
+                    && record.state.command.as_deref() == Some(command)
+                    && matches!(record.state.state.as_str(), "starting" | "running")
+            })
+            .map(|record| record.state.clone())
+    }
+
+    pub async fn start(
+        self: &Arc<Self>,
+        project: &ProjectInfo,
+        command: Option<&str>,
+    ) -> ProjectProcessState {
+        let command_line = command
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| project.start_command.trim().to_string());
+
+        if !command_line.is_empty() {
+            if let Some(existing) = self
+                .find_active_run_by_command(&project.id, &command_line)
+                .await
+            {
+                return existing;
             }
         }
 
-        let command_line = project.start_command.trim().to_string();
         if command_line.is_empty() {
+            let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let run_id = format!("{}#{generation}", project.id);
             let state = ProjectProcessState {
+                run_id: run_id.clone(),
                 project_id: project.id.clone(),
                 state: "failed".to_string(),
                 pid: None,
@@ -118,12 +158,14 @@ impl ProcessManager {
                 url: None,
                 error: Some("启动命令为空".to_string()),
             };
-            self.replace_record(state.clone(), 0, true).await;
+            self.replace_record(state.clone(), generation, true).await;
             return state;
         }
 
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let run_id = format!("{}#{generation}", project.id);
         let starting = ProjectProcessState {
+            run_id: run_id.clone(),
             project_id: project.id.clone(),
             state: "starting".to_string(),
             pid: None,
@@ -136,6 +178,7 @@ impl ProcessManager {
         };
         self.replace_record(starting, generation, false).await;
         self.append_log(
+            &run_id,
             &project.id,
             "system",
             format!("执行启动命令：{command_line}"),
@@ -168,6 +211,7 @@ impl ProcessManager {
             Ok(child) => child,
             Err(error) => {
                 let failed = ProjectProcessState {
+                    run_id: run_id.clone(),
                     project_id: project.id.clone(),
                     state: "failed".to_string(),
                     pid: None,
@@ -179,7 +223,7 @@ impl ProcessManager {
                     error: Some(error.to_string()),
                 };
                 self.replace_record(failed.clone(), generation, true).await;
-                self.append_log(&project.id, "system", format!("启动失败：{error}"))
+                self.append_log(&run_id, &project.id, "system", format!("启动失败：{error}"))
                     .await;
                 return failed;
             }
@@ -189,6 +233,7 @@ impl ProcessManager {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let running = ProjectProcessState {
+            run_id: run_id.clone(),
             project_id: project.id.clone(),
             state: "running".to_string(),
             pid,
@@ -204,52 +249,64 @@ impl ProcessManager {
 
         if let Some(stdout) = stdout {
             let manager = Arc::clone(self);
+            let run_id = run_id.clone();
             let project_id = project.id.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     manager
-                        .handle_output(&project_id, generation, "stdout", line)
+                        .handle_output(&run_id, &project_id, generation, "stdout", line)
                         .await;
                 }
             });
         }
         if let Some(stderr) = stderr {
             let manager = Arc::clone(self);
+            let run_id = run_id.clone();
             let project_id = project.id.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     manager
-                        .handle_output(&project_id, generation, "stderr", line)
+                        .handle_output(&run_id, &project_id, generation, "stderr", line)
                         .await;
                 }
             });
         }
 
         let manager = Arc::clone(self);
-        let project_id = project.id.clone();
+        let wait_run_id = run_id.clone();
+        let wait_project_id = project.id.clone();
         tokio::spawn(async move {
             let result = child.wait().await;
-            manager.handle_exit(&project_id, generation, result).await;
+            manager
+                .handle_exit(&wait_run_id, &wait_project_id, generation, result)
+                .await;
         });
 
         running
     }
 
-    pub async fn stop(self: &Arc<Self>, project_id: &str) -> Result<ProjectProcessState, String> {
+    pub async fn stop(
+        self: &Arc<Self>,
+        project_id: &str,
+        run_id: &str,
+    ) -> Result<ProjectProcessState, String> {
         let (pid, generation, current_state) = {
             let mut processes = self.processes.lock().await;
-            let Some(record) = processes.get_mut(project_id) else {
-                return Ok(ProjectProcessState::idle(project_id));
+            let Some(record) = processes.get_mut(run_id) else {
+                let mut idle = ProjectProcessState::idle(project_id);
+                idle.run_id = run_id.to_string();
+                return Ok(idle);
             };
+            if record.state.project_id != project_id {
+                return Err(format!("运行实例与项目不匹配：{run_id}"));
+            }
             if !matches!(
                 record.state.state.as_str(),
                 "starting" | "running" | "stopping"
             ) {
-                let state = record.state.clone();
-                processes.remove(project_id);
-                return Ok(state);
+                return Ok(record.state.clone());
             }
             record.state.state = "stopping".to_string();
             let state = record.state.clone();
@@ -269,12 +326,12 @@ impl ProcessManager {
             .await;
             if result.exit_code != 0 {
                 for _ in 0..10 {
-                    if self.has_generation_exited(project_id, generation).await {
+                    if self.has_generation_exited(run_id, generation).await {
                         break;
                     }
                     sleep(Duration::from_millis(50)).await;
                 }
-                if !self.has_generation_exited(project_id, generation).await {
+                if !self.has_generation_exited(run_id, generation).await {
                     let error = if result.stderr.trim().is_empty() {
                         format!("taskkill 退出码：{}", result.exit_code)
                     } else {
@@ -282,7 +339,7 @@ impl ProcessManager {
                     };
                     let mut processes = self.processes.lock().await;
                     if let Some(record) = processes
-                        .get_mut(project_id)
+                        .get_mut(run_id)
                         .filter(|record| record.generation == generation)
                     {
                         record.state.state = "running".to_string();
@@ -290,7 +347,7 @@ impl ProcessManager {
                         self.emit_value("process-state", &record.state);
                     }
                     drop(processes);
-                    self.append_log(project_id, "system", format!("停止失败：{error}"))
+                    self.append_log(run_id, project_id, "system", format!("停止失败：{error}"))
                         .await;
                     return Err(error);
                 }
@@ -298,26 +355,28 @@ impl ProcessManager {
         }
 
         let stopped = ProjectProcessState {
+            run_id: run_id.to_string(),
             project_id: project_id.to_string(),
             state: "exited".to_string(),
             pid,
-            command: current_state.command,
-            started_at: current_state.started_at,
+            command: current_state.command.clone(),
+            started_at: current_state.started_at.clone(),
             exited_at: Some(Utc::now().to_rfc3339()),
             exit_code: Some(0),
-            url: current_state.url,
+            url: current_state.url.clone(),
             error: None,
         };
         let mut processes = self.processes.lock().await;
-        if processes
-            .get(project_id)
-            .is_some_and(|record| record.generation == generation)
+        if let Some(record) = processes
+            .get_mut(run_id)
+            .filter(|record| record.generation == generation)
         {
-            processes.remove(project_id);
+            record.state = stopped.clone();
+            record.exited = true;
         }
         drop(processes);
         self.emit_value("process-state", &stopped);
-        self.append_log(project_id, "system", "已停止项目进程".to_string())
+        self.append_log(run_id, project_id, "system", "已停止项目进程".to_string())
             .await;
         Ok(stopped)
     }
@@ -325,13 +384,60 @@ impl ProcessManager {
     pub async fn restart(
         self: &Arc<Self>,
         project: &ProjectInfo,
+        run_id: &str,
     ) -> Result<ProjectProcessState, String> {
-        self.stop(&project.id).await?;
-        Ok(self.start(project).await)
+        let previous = self.get_state(run_id).await;
+        if !previous.run_id.is_empty() && previous.project_id != project.id {
+            return Err(format!("运行实例与项目不匹配：{run_id}"));
+        }
+        let command = previous.command.clone();
+        self.stop(&project.id, run_id).await?;
+        Ok(self.start(project, command.as_deref()).await)
+    }
+
+    pub async fn stop_project_runs(self: &Arc<Self>, project_id: &str) -> TaskResult {
+        let run_ids: Vec<String> = self
+            .processes
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, record)| {
+                record.state.project_id == project_id
+                    && matches!(
+                        record.state.state.as_str(),
+                        "starting" | "running" | "stopping"
+                    )
+            })
+            .map(|(run_id, _)| run_id.clone())
+            .collect();
+        if run_ids.is_empty() {
+            return TaskResult {
+                ok: true,
+                message: "当前项目没有运行中的服务".to_string(),
+                stderr: None,
+                exit_code: None,
+            };
+        }
+
+        let results =
+            futures::future::join_all(run_ids.iter().map(|run_id| self.stop(project_id, run_id)))
+                .await;
+        let failed = results.iter().filter(|result| result.is_err()).count();
+        let stopped = results.len() - failed;
+        TaskResult {
+            ok: failed == 0,
+            message: if failed == 0 {
+                format!("已停止该项目的 {stopped} 个服务")
+            } else {
+                format!("已停止 {stopped} 个服务，{failed} 个服务停止失败")
+            },
+            stderr: None,
+            exit_code: None,
+        }
     }
 
     pub async fn stop_all(self: &Arc<Self>) -> TaskResult {
-        let project_ids: Vec<String> = self
+        let targets: Vec<(String, String)> = self
             .processes
             .lock()
             .await
@@ -342,9 +448,9 @@ impl ProcessManager {
                     "starting" | "running" | "stopping"
                 )
             })
-            .map(|(project_id, _)| project_id.clone())
+            .map(|(run_id, record)| (record.state.project_id.clone(), run_id.clone()))
             .collect();
-        if project_ids.is_empty() {
+        if targets.is_empty() {
             return TaskResult {
                 ok: true,
                 message: "当前没有运行中的项目".to_string(),
@@ -353,29 +459,39 @@ impl ProcessManager {
             };
         }
 
-        let results =
-            futures::future::join_all(project_ids.iter().map(|project_id| self.stop(project_id)))
-                .await;
+        let results = futures::future::join_all(
+            targets
+                .iter()
+                .map(|(project_id, run_id)| self.stop(project_id, run_id)),
+        )
+        .await;
         let failed = results.iter().filter(|result| result.is_err()).count();
         let stopped = results.len() - failed;
         TaskResult {
             ok: failed == 0,
             message: if failed == 0 {
-                format!("已停止全部 {stopped} 个运行中的项目")
+                format!("已停止全部 {stopped} 个运行中的服务")
             } else {
-                format!("已停止 {stopped} 个项目，{failed} 个项目停止失败")
+                format!("已停止 {stopped} 个服务，{failed} 个服务停止失败")
             },
             stderr: None,
             exit_code: None,
         }
     }
 
-    async fn handle_output(&self, project_id: &str, generation: u64, stream: &str, line: String) {
+    async fn handle_output(
+        &self,
+        run_id: &str,
+        project_id: &str,
+        generation: u64,
+        stream: &str,
+        line: String,
+    ) {
         let clean_line = strip_ansi(&line);
         let state_update = {
             let mut processes = self.processes.lock().await;
             let Some(record) = processes
-                .get_mut(project_id)
+                .get_mut(run_id)
                 .filter(|record| record.generation == generation)
             else {
                 return;
@@ -389,11 +505,12 @@ impl ProcessManager {
         if let Some(state) = state_update {
             self.emit_value("process-state", &state);
         }
-        self.append_log(project_id, stream, clean_line).await;
+        self.append_log(run_id, project_id, stream, clean_line).await;
     }
 
     async fn handle_exit(
         &self,
+        run_id: &str,
         project_id: &str,
         generation: u64,
         result: std::io::Result<std::process::ExitStatus>,
@@ -401,7 +518,7 @@ impl ProcessManager {
         let update = {
             let mut processes = self.processes.lock().await;
             let Some(record) = processes
-                .get_mut(project_id)
+                .get_mut(run_id)
                 .filter(|record| record.generation == generation)
             else {
                 return;
@@ -428,6 +545,7 @@ impl ProcessManager {
         if let Some(state) = update {
             self.emit_value("process-state", &state);
             self.append_log(
+                run_id,
                 project_id,
                 "system",
                 format!(
@@ -443,7 +561,7 @@ impl ProcessManager {
 
     async fn replace_record(&self, state: ProjectProcessState, generation: u64, exited: bool) {
         self.processes.lock().await.insert(
-            state.project_id.clone(),
+            state.run_id.clone(),
             ProcessRecord {
                 state: state.clone(),
                 generation,
@@ -453,16 +571,17 @@ impl ProcessManager {
         self.emit_value("process-state", &state);
     }
 
-    async fn has_generation_exited(&self, project_id: &str, generation: u64) -> bool {
+    async fn has_generation_exited(&self, run_id: &str, generation: u64) -> bool {
         self.processes
             .lock()
             .await
-            .get(project_id)
+            .get(run_id)
             .is_none_or(|record| record.generation != generation || record.exited)
     }
 
-    async fn append_log(&self, project_id: &str, stream: &str, line: String) {
+    async fn append_log(&self, run_id: &str, project_id: &str, stream: &str, line: String) {
         let entry = ProjectLogEntry {
+            run_id: run_id.to_string(),
             project_id: project_id.to_string(),
             stream: stream.to_string(),
             line,
@@ -470,10 +589,10 @@ impl ProcessManager {
         };
         let limit = self.log_line_limit.load(Ordering::Relaxed);
         let mut logs = self.logs.lock().await;
-        let project_logs = logs.entry(project_id.to_string()).or_default();
-        project_logs.push(entry.clone());
-        if project_logs.len() > limit {
-            project_logs.drain(0..project_logs.len() - limit);
+        let run_logs = logs.entry(run_id.to_string()).or_default();
+        run_logs.push(entry.clone());
+        if run_logs.len() > limit {
+            run_logs.drain(0..run_logs.len() - limit);
         }
         drop(logs);
         self.emit_value("project-log", &entry);
@@ -486,16 +605,98 @@ impl ProcessManager {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
+fn make_fixture_project(id: &str, path: &str, start_command: &str) -> ProjectInfo {
+    ProjectInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        path: path.to_string(),
+        package_info: Some(crate::models::PackageInfo {
+            name: id.to_string(),
+            scripts: HashMap::new(),
+            package_manager: "npm".to_string(),
+        }),
+        is_git_repository: false,
+        is_favorite: false,
+        is_hidden: false,
+        start_command: start_command.to_string(),
+        error: None,
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, sync::Arc, time::Duration};
+    use std::sync::Arc;
+
+    use super::{make_fixture_project, ProcessManager};
+
+    #[tokio::test]
+    async fn rejects_empty_command_without_overwriting_active_runs() {
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+        let project = make_fixture_project("fixture", ".", "");
+        let failed = manager.start(&project, Some("   ")).await;
+        assert_eq!(failed.state, "failed");
+        assert!(failed.run_id.starts_with("fixture#"));
+        assert_eq!(failed.error.as_deref(), Some("启动命令为空"));
+    }
+
+    #[tokio::test]
+    async fn returns_existing_active_run_for_same_command() {
+        use std::sync::atomic::Ordering;
+
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+        let project = make_fixture_project("dup", ".", "echo ok");
+        manager.generation.store(99, Ordering::Relaxed);
+
+        {
+            let generation = 99;
+            let run_id = format!("dup#{generation}");
+            let state = crate::models::ProjectProcessState {
+                run_id: run_id.clone(),
+                project_id: "dup".to_string(),
+                state: "running".to_string(),
+                pid: Some(1),
+                command: Some("npm run dev".to_string()),
+                started_at: Some("now".to_string()),
+                exited_at: None,
+                exit_code: None,
+                url: None,
+                error: None,
+            };
+            manager.processes.lock().await.insert(
+                run_id,
+                super::ProcessRecord {
+                    state,
+                    generation,
+                    exited: false,
+                },
+            );
+        }
+
+        let again = manager.start(&project, Some("npm run dev")).await;
+        assert_eq!(again.run_id, "dup#99");
+        assert_eq!(again.state, "running");
+
+        // 不同命令应新建 run，即使命令本身会立刻失败
+        let other = manager
+            .start(&project, Some("__web_profile_missing_command__"))
+            .await;
+        assert_ne!(other.run_id, "dup#99");
+        assert_eq!(
+            other.command.as_deref(),
+            Some("__web_profile_missing_command__")
+        );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::{fs, sync::Arc, time::Duration};
 
     use tempfile::tempdir;
     use tokio::time::sleep;
 
-    use crate::models::{PackageInfo, ProjectInfo};
-
-    use super::ProcessManager;
+    use super::{make_fixture_project, ProcessManager};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn starts_streams_and_stops_a_windows_process_tree() {
@@ -512,38 +713,100 @@ mod tests {
             "console.log('Local: http://localhost:4321/'); setInterval(() => {}, 1000);",
         )
         .expect("应写入进程 fixture");
-        let project = ProjectInfo {
-            id: "fixture".to_string(),
-            name: "fixture".to_string(),
-            path: temp.path().to_string_lossy().to_string(),
-            package_info: Some(PackageInfo {
-                name: "fixture".to_string(),
-                scripts: HashMap::new(),
-                package_manager: "npm".to_string(),
-            }),
-            is_git_repository: false,
-            is_favorite: false,
-            is_hidden: false,
-            start_command: "node fixture.js".to_string(),
-            error: None,
-        };
+        let project = make_fixture_project(
+            "fixture",
+            &temp.path().to_string_lossy(),
+            "node fixture.js",
+        );
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let running = manager.start(&project).await;
+        let running = manager.start(&project, None).await;
         assert_eq!(running.state, "running");
+        let run_id = running.run_id.clone();
         sleep(Duration::from_millis(500)).await;
         assert_eq!(
-            manager.get_state(&project.id).await.url.as_deref(),
+            manager.get_state(&run_id).await.url.as_deref(),
             Some("http://localhost:4321/")
         );
         assert!(manager
-            .get_logs(&project.id)
+            .get_logs(&run_id)
             .await
             .iter()
             .any(|entry| entry.line.contains("localhost:4321")));
+        assert!(manager
+            .get_logs(&run_id)
+            .await
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node fixture.js")));
 
-        let stopped = manager.stop(&project.id).await.expect("停止应成功");
+        let stopped = manager
+            .stop(&project.id, &run_id)
+            .await
+            .expect("停止应成功");
         assert_eq!(stopped.state, "exited");
+        assert!(!manager.has_running_projects().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runs_two_commands_for_same_project_with_isolated_logs() {
+        if std::process::Command::new("where")
+            .arg("node")
+            .output()
+            .map_or(true, |output| !output.status.success())
+        {
+            return;
+        }
+        let temp = tempdir().expect("应创建临时目录");
+        fs::write(
+            temp.path().join("a.js"),
+            "console.log('Local: http://localhost:4001/'); setInterval(() => {}, 1000);",
+        )
+        .expect("应写入 fixture a");
+        fs::write(
+            temp.path().join("b.js"),
+            "console.log('Local: http://localhost:4002/'); setInterval(() => {}, 1000);",
+        )
+        .expect("应写入 fixture b");
+        let project = make_fixture_project("multi", &temp.path().to_string_lossy(), "node a.js");
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+
+        let first = manager.start(&project, Some("node a.js")).await;
+        let second = manager.start(&project, Some("node b.js")).await;
+        assert_eq!(first.state, "running");
+        assert_eq!(second.state, "running");
+        assert_ne!(first.run_id, second.run_id);
+
+        let duplicate = manager.start(&project, Some("node a.js")).await;
+        assert_eq!(duplicate.run_id, first.run_id);
+
+        sleep(Duration::from_millis(500)).await;
+
+        let first_logs = manager.get_logs(&first.run_id).await;
+        let second_logs = manager.get_logs(&second.run_id).await;
+        assert!(first_logs
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node a.js")));
+        assert!(second_logs
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node b.js")));
+        assert!(first_logs
+            .iter()
+            .any(|entry| entry.line.contains("4001")));
+        assert!(second_logs
+            .iter()
+            .any(|entry| entry.line.contains("4002")));
+        assert!(!first_logs.iter().any(|entry| entry.line.contains("4002")));
+        assert!(!second_logs.iter().any(|entry| entry.line.contains("4001")));
+
+        manager
+            .stop(&project.id, &first.run_id)
+            .await
+            .expect("停止第一个服务应成功");
+        assert_eq!(manager.get_state(&second.run_id).await.state, "running");
+
+        manager
+            .stop_project_runs(&project.id)
+            .await;
         assert!(!manager.has_running_projects().await);
     }
 }

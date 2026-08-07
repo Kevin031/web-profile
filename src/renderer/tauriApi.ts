@@ -44,13 +44,18 @@ export const createTauriApi = (dependencyOverrides: Partial<TauriApiDependencies
     listBranches: (projectId) => dependencies.invoke('list_branches', { projectId }),
     pullProject: (projectId) => dependencies.invoke('pull_project', { projectId }),
     checkoutBranch: (projectId, branchName) => dependencies.invoke('checkout_branch', { projectId, branchName }),
-    startProject: (projectId) => dependencies.invoke('start_project', { projectId }),
-    stopProject: (projectId) => dependencies.invoke('stop_project', { projectId }),
+    startProject: (projectId, command) =>
+      dependencies.invoke('start_project', {
+        projectId,
+        ...(command !== undefined ? { command } : {})
+      }),
+    stopProject: (projectId, runId) => dependencies.invoke('stop_project', { projectId, runId }),
+    stopProjectRuns: (projectId) => dependencies.invoke('stop_project_runs', { projectId }),
     stopAllProjects: () => dependencies.invoke('stop_all_projects'),
-    restartProject: (projectId) => dependencies.invoke('restart_project', { projectId }),
+    restartProject: (projectId, runId) => dependencies.invoke('restart_project', { projectId, runId }),
     openProject: (projectId, tool: ProjectOpenTool) => dependencies.invoke('open_project', { projectId, tool }),
-    openProjectUrl: (projectId) => dependencies.invoke('open_project_url', { projectId }),
-    getProjectLogs: (projectId) => dependencies.invoke('get_project_logs', { projectId }),
+    openProjectUrl: (projectId, runId) => dependencies.invoke('open_project_url', { projectId, runId }),
+    getProjectLogs: (projectId, runId) => dependencies.invoke('get_project_logs', { projectId, runId }),
     updateProjectConfig: (projectId, patch: ProjectConfigPatch) =>
       dependencies.invoke('update_project_config', { projectId, patch }),
     updateAppConfig: (patch: Partial<AppConfig>) => dependencies.invoke('update_app_config', { patch }),

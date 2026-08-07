@@ -117,7 +117,7 @@ export const App = (): ReactElement => {
       );
     });
     const offState = api.onProcessState((state) => {
-      setProcessStates((current) => ({ ...current, [state.projectId]: state }));
+      setProcessStates((current) => ({ ...current, [state.runId]: state }));
       if (isProjectStartSettled(state)) {
         setStartingProjectIds((current) => withoutProjectId(current, state.projectId));
       }
@@ -125,7 +125,7 @@ export const App = (): ReactElement => {
     const offLog = api.onProjectLog((entry) => {
       setLogs((current) => ({
         ...current,
-        [entry.projectId]: [...(current[entry.projectId] ?? []), entry].slice(-500)
+        [entry.runId]: [...(current[entry.runId] ?? []), entry].slice(-500)
       }));
     });
 
@@ -147,11 +147,11 @@ export const App = (): ReactElement => {
     const rankedProjects = projects
       .filter((project) => {
         const gitStatus = gitStatuses[project.id];
-        const processState = processStates[project.id];
+        const aggregate = getProjectRunAggregate(processStates, project.id);
         const matchesFilter =
           filter === 'all' ||
           (filter === 'favorite' && project.isFavorite) ||
-          (filter === 'running' && processState?.state === 'running') ||
+          (filter === 'running' && aggregate.liveCount > 0) ||
           (filter === 'dirty' && gitStatus?.workingTree === 'dirty') ||
           (filter === 'hidden' && project.isHidden);
         return matchesFilter && (filter === 'hidden' || !project.isHidden);
@@ -159,7 +159,7 @@ export const App = (): ReactElement => {
       .map((project, index) => ({
         index,
         project,
-        rank: getProjectSearchRank(project, gitStatuses[project.id], processStates[project.id], query)
+        rank: getProjectSearchRank(project, gitStatuses[project.id], getProjectRunAggregate(processStates, project.id), query)
       }))
       .filter((item) => item.rank >= 0);
 
@@ -173,14 +173,14 @@ export const App = (): ReactElement => {
     return {
       all: shownProjects.length,
       favorite: shownProjects.filter((project) => project.isFavorite).length,
-      running: shownProjects.filter((project) => processStates[project.id]?.state === 'running').length,
+      running: shownProjects.filter((project) => getProjectRunAggregate(processStates, project.id).liveCount > 0).length,
       dirty: shownProjects.filter((project) => gitStatuses[project.id]?.workingTree === 'dirty').length,
       hidden: projects.filter((project) => project.isHidden).length
     };
   }, [gitStatuses, processStates, projects]);
 
   const runningProjectCount = useMemo(
-    () => Object.values(processStates).filter((state) => state.state === 'running').length,
+    () => Object.values(processStates).filter((state) => isLiveRunState(state.state)).length,
     [processStates]
   );
 
@@ -243,11 +243,18 @@ export const App = (): ReactElement => {
   };
 
   const loadProjectDetails = async (project: ProjectInfo): Promise<void> => {
-    const [projectLogs, branchList] = await Promise.all([
-      api.getProjectLogs(project.id),
+    const runIds = collectProjectRunIds(processStates, logs, project.id);
+    const [projectLogBatches, branchList] = await Promise.all([
+      Promise.all(runIds.map(async (runId) => [runId, await api.getProjectLogs(project.id, runId)] as const)),
       project.isGitRepository ? api.listBranches(project.id) : Promise.resolve([])
     ]);
-    setLogs((current) => ({ ...current, [project.id]: projectLogs }));
+    setLogs((current) => {
+      const next = { ...current };
+      for (const [runId, entries] of projectLogBatches) {
+        next[runId] = entries;
+      }
+      return next;
+    });
     setBranches(branchList);
   };
 
@@ -292,7 +299,7 @@ export const App = (): ReactElement => {
     setStartingProjectIds((current) => withProjectId(current, project.id));
     const succeeded = await withBusy(project.id, async () => {
       const state = await api.startProject(project.id);
-      setProcessStates((current) => ({ ...current, [project.id]: state }));
+      setProcessStates((current) => ({ ...current, [state.runId]: state }));
       if (isProjectStartSettled(state)) {
         setStartingProjectIds((current) => withoutProjectId(current, project.id));
       }
@@ -304,8 +311,15 @@ export const App = (): ReactElement => {
 
   const stopProject = async (project: ProjectInfo): Promise<void> => {
     await withBusy(project.id, async () => {
-      const state = await api.stopProject(project.id);
-      setProcessStates((current) => ({ ...current, [project.id]: state }));
+      const result = await api.stopProjectRuns(project.id);
+      showToast(result.ok ? 'success' : 'error', result.message);
+    });
+  };
+
+  const stopProjectRun = async (project: ProjectInfo, runId: string): Promise<void> => {
+    await withBusy(project.id, async () => {
+      const state = await api.stopProject(project.id, runId);
+      setProcessStates((current) => ({ ...current, [state.runId]: state }));
     });
   };
 
@@ -328,8 +342,11 @@ export const App = (): ReactElement => {
   const restartProject = async (project: ProjectInfo): Promise<void> => {
     setStartingProjectIds((current) => withProjectId(current, project.id));
     const succeeded = await withBusy(project.id, async () => {
-      const state = await api.restartProject(project.id);
-      setProcessStates((current) => ({ ...current, [project.id]: state }));
+      const defaultRun = findActiveRunByCommand(processStates, project.id, project.startCommand);
+      const state = defaultRun
+        ? await api.restartProject(project.id, defaultRun.runId)
+        : await api.startProject(project.id);
+      setProcessStates((current) => ({ ...current, [state.runId]: state }));
       if (isProjectStartSettled(state)) {
         setStartingProjectIds((current) => withoutProjectId(current, project.id));
       }
@@ -339,9 +356,17 @@ export const App = (): ReactElement => {
     }
   };
 
-  const openProjectUrl = async (project: ProjectInfo): Promise<void> => {
+  const openProjectUrl = async (project: ProjectInfo, runId?: string): Promise<void> => {
     try {
-      const result = await api.openProjectUrl(project.id);
+      const targetRunId =
+        runId ??
+        getProjectRunAggregate(processStates, project.id).primaryRun?.runId ??
+        findActiveRunByCommand(processStates, project.id, project.startCommand)?.runId;
+      if (!targetRunId) {
+        showToast('error', '尚未获取到项目访问地址');
+        return;
+      }
+      const result = await api.openProjectUrl(project.id, targetRunId);
       showToast(result.ok ? 'success' : 'error', result.message);
     } catch (error) {
       showToast('error', errorMessage(error));
@@ -413,17 +438,12 @@ export const App = (): ReactElement => {
   };
 
   const runProjectScript = async (project: ProjectInfo, scriptName: string): Promise<void> => {
-    const packageManager = project.packageInfo?.packageManager;
-    const startCommand = packageManager === 'pnpm' || packageManager === 'yarn' || packageManager === 'bun'
-      ? `${packageManager} ${scriptName}`
-      : `npm run ${scriptName}`;
+    const startCommand = buildScriptCommand(project, scriptName);
 
     setStartingProjectIds((current) => withProjectId(current, project.id));
     const succeeded = await withBusy(project.id, async () => {
-      const nextProjects = await api.updateProjectConfig(project.id, { startCommand });
-      setProjects(nextProjects);
-      const state = await api.startProject(project.id);
-      setProcessStates((current) => ({ ...current, [project.id]: state }));
+      const state = await api.startProject(project.id, startCommand);
+      setProcessStates((current) => ({ ...current, [state.runId]: state }));
       if (isProjectStartSettled(state)) {
         setStartingProjectIds((current) => withoutProjectId(current, project.id));
       }
@@ -647,8 +667,8 @@ export const App = (): ReactElement => {
           <ProjectDetails
             branches={branches}
             gitStatus={gitStatuses[selectedProject.id]}
-            logs={logs[selectedProject.id] ?? []}
-            processState={processStates[selectedProject.id]}
+            logs={logs}
+            processStates={processStates}
             project={selectedProject}
             onCheckout={checkoutBranch}
             onCopyPath={copyProjectPath}
@@ -658,6 +678,7 @@ export const App = (): ReactElement => {
             onOpenUrl={openProjectUrl}
             onSaveCommand={updateStartCommand}
             onRunScript={runProjectScript}
+            onStopRun={stopProjectRun}
             openTool={config?.projectOpenTool ?? 'explorer'}
           />
         ) : (
@@ -880,7 +901,7 @@ interface ProjectTableProps {
   onSelect: (projectId: string) => void;
   onOpenProject: (project: ProjectInfo) => Promise<void>;
   onOpenToolChange: (tool: ProjectOpenTool) => Promise<void>;
-  onOpenUrl: (project: ProjectInfo) => Promise<void>;
+  onOpenUrl: (project: ProjectInfo, runId?: string) => Promise<void>;
   onStart: (project: ProjectInfo) => Promise<void>;
   onStop: (project: ProjectInfo) => Promise<void>;
   onToggleFavorite: (project: ProjectInfo, favorite: boolean) => Promise<void>;
@@ -950,9 +971,10 @@ const ProjectTable = ({
         <tbody>
           {projects.map((project) => {
             const gitStatus = gitStatuses[project.id];
-            const processState = processStates[project.id] ?? { projectId: project.id, state: 'idle' };
+            const aggregate = getProjectRunAggregate(processStates, project.id);
             const isBusy = busyProjectId === project.id;
             const isStarting = startingProjectIds.has(project.id);
+            const isRunning = aggregate.liveCount > 0;
             return (
               <tr className={selectedProjectId === project.id ? 'selected' : ''} key={project.id} onClick={() => onSelect(project.id)}>
                 <td>
@@ -980,20 +1002,20 @@ const ProjectTable = ({
                 </td>
                 <td className="command-cell" title={project.startCommand}>{project.startCommand}</td>
                 <td>
-                  <RunBadge state={processState} />
+                  <RunBadge aggregate={aggregate} />
                 </td>
-                <td className="url-cell" title={processState.url ?? ''}>
-                  {processState.url ? (
+                <td className="url-cell" title={aggregate.url ?? ''}>
+                  {aggregate.url ? (
                     <button
                       className="url-open-button"
                       type="button"
                       title="用浏览器打开"
                       onClick={(event) => {
                         event.stopPropagation();
-                        void onOpenUrl(project);
+                        void onOpenUrl(project, aggregate.primaryRun?.runId);
                       }}
                     >
-                      <span>{processState.url}</span>
+                      <span>{aggregate.url}</span>
                       <ExternalLink size={13} />
                     </button>
                   ) : (
@@ -1011,14 +1033,14 @@ const ProjectTable = ({
                     {isStarting ? (
                       <button
                         type="button"
-                        title="项目启动中，点击停止"
+                        title="项目启动中，点击停止全部服务"
                         disabled={isBusy}
                         onClick={() => void onStop(project)}
                       >
                         <LoaderCircle className="spin" size={15} />
                       </button>
-                    ) : processState.state === 'running' || processState.state === 'starting' ? (
-                      <button type="button" title="停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                    ) : isRunning ? (
+                      <button type="button" title="停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
                         <Square size={15} />
                       </button>
                     ) : (
@@ -1028,7 +1050,7 @@ const ProjectTable = ({
                     )}
                     <RowMoreActions
                       canPull={project.isGitRepository}
-                      canRestart={processState.state === 'running' || processState.state === 'starting'}
+                      canRestart={Boolean(findActiveRunByCommand(processStates, project.id, project.startCommand))}
                       disabled={isBusy}
                       onPull={() => onPull(project)}
                       onRefresh={() => onRefreshGit(project)}
@@ -1090,10 +1112,10 @@ const ProjectGrid = ({
       <div className="project-grid">
         {projects.map((project) => {
           const gitStatus = gitStatuses[project.id];
-          const processState = processStates[project.id] ?? { projectId: project.id, state: 'idle' };
+          const aggregate = getProjectRunAggregate(processStates, project.id);
           const isBusy = busyProjectId === project.id;
           const isStarting = startingProjectIds.has(project.id);
-          const isRunning = processState.state === 'running' || processState.state === 'starting';
+          const isRunning = aggregate.liveCount > 0;
 
           return (
             <article
@@ -1124,7 +1146,7 @@ const ProjectGrid = ({
                   <strong title={project.name}>{project.name}</strong>
                   <span title={project.path}>{project.path}</span>
                 </div>
-                <RunBadge state={processState} />
+                <RunBadge aggregate={aggregate} />
               </header>
 
               <div className="project-card-meta">
@@ -1144,16 +1166,16 @@ const ProjectGrid = ({
 
               <div className="project-card-url">
                 <span>URL</span>
-                {processState.url ? (
+                {aggregate.url ? (
                   <button
                     type="button"
                     title="用浏览器打开"
                     onClick={(event) => {
                       event.stopPropagation();
-                      void onOpenUrl(project);
+                      void onOpenUrl(project, aggregate.primaryRun?.runId);
                     }}
                   >
-                    <span>{processState.url}</span>
+                    <span>{aggregate.url}</span>
                     <ExternalLink size={13} />
                   </button>
                 ) : (
@@ -1169,11 +1191,11 @@ const ProjectGrid = ({
                   onToolChange={onOpenToolChange}
                 />
                 {isStarting ? (
-                  <button type="button" title="项目启动中，点击停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                  <button type="button" title="项目启动中，点击停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
                     <LoaderCircle className="spin" size={15} />
                   </button>
                 ) : isRunning ? (
-                  <button type="button" title="停止" disabled={isBusy} onClick={() => void onStop(project)}>
+                  <button type="button" title="停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
                     <Square size={15} />
                   </button>
                 ) : (
@@ -1183,7 +1205,7 @@ const ProjectGrid = ({
                 )}
                 <RowMoreActions
                   canPull={project.isGitRepository}
-                  canRestart={isRunning}
+                  canRestart={Boolean(findActiveRunByCommand(processStates, project.id, project.startCommand))}
                   disabled={isBusy}
                   onPull={() => onPull(project)}
                   onRefresh={() => onRefreshGit(project)}
@@ -1201,8 +1223,8 @@ const ProjectGrid = ({
 interface ProjectDetailsProps {
   branches: BranchInfo[];
   gitStatus?: GitStatus;
-  logs: ProjectLogEntry[];
-  processState?: ProjectProcessState;
+  logs: Record<string, ProjectLogEntry[]>;
+  processStates: Record<string, ProjectProcessState>;
   project: ProjectInfo;
   openTool: ProjectOpenTool;
   onCheckout: (project: ProjectInfo, branchName: string) => Promise<void>;
@@ -1210,16 +1232,17 @@ interface ProjectDetailsProps {
   onHide: (project: ProjectInfo, hidden: boolean) => Promise<void>;
   onOpenProject: (project: ProjectInfo) => Promise<void>;
   onOpenToolChange: (tool: ProjectOpenTool) => Promise<void>;
-  onOpenUrl: (project: ProjectInfo) => Promise<void>;
+  onOpenUrl: (project: ProjectInfo, runId?: string) => Promise<void>;
   onRunScript: (project: ProjectInfo, scriptName: string) => Promise<void>;
   onSaveCommand: (project: ProjectInfo, startCommand: string) => Promise<void>;
+  onStopRun: (project: ProjectInfo, runId: string) => Promise<void>;
 }
 
 const ProjectDetails = ({
   branches,
   gitStatus,
   logs,
-  processState,
+  processStates,
   project,
   openTool,
   onCheckout,
@@ -1229,14 +1252,33 @@ const ProjectDetails = ({
   onOpenToolChange,
   onOpenUrl,
   onRunScript,
-  onSaveCommand
+  onSaveCommand,
+  onStopRun
 }: ProjectDetailsProps): ReactElement => {
   const [command, setCommand] = useState(project.startCommand);
-  const projectUrl = processState?.url;
+  const aggregate = getProjectRunAggregate(processStates, project.id);
+  const runTabs = useMemo(
+    () => collectProjectRunTabs(processStates, logs, project.id),
+    [logs, processStates, project.id]
+  );
+  const [selectedRunId, setSelectedRunId] = useState('');
+  const activeTab = runTabs.find((tab) => tab.runId === selectedRunId) ?? runTabs[0];
+  const activeLogs = activeTab ? logs[activeTab.runId] ?? [] : [];
+  const projectUrl = activeTab?.url ?? aggregate.url;
 
   useEffect(() => {
     setCommand(project.startCommand);
   }, [project.id, project.startCommand]);
+
+  useEffect(() => {
+    if (runTabs.length === 0) {
+      setSelectedRunId('');
+      return;
+    }
+    if (!runTabs.some((tab) => tab.runId === selectedRunId)) {
+      setSelectedRunId(runTabs[0].runId);
+    }
+  }, [runTabs, selectedRunId]);
 
   return (
     <div className="details">
@@ -1283,7 +1325,7 @@ const ProjectDetails = ({
               </div>
               <div>
                 <span>运行</span>
-                <strong>{statusText[processState?.state ?? 'idle']}</strong>
+                <strong>{formatAggregateStatus(aggregate)}</strong>
               </div>
               <div>
                 <span>端口</span>
@@ -1310,7 +1352,12 @@ const ProjectDetails = ({
             <section className="visit-section">
               <h3>访问</h3>
               {projectUrl ? (
-                <button className="visit-button" type="button" title="用浏览器打开" onClick={() => void onOpenUrl(project)}>
+                <button
+                  className="visit-button"
+                  type="button"
+                  title="用浏览器打开"
+                  onClick={() => void onOpenUrl(project, activeTab?.runId)}
+                >
                   <span>{projectUrl}</span>
                   <ExternalLink size={15} />
                 </button>
@@ -1339,29 +1386,62 @@ const ProjectDetails = ({
           <section className="scripts-section">
             <h3>Scripts</h3>
             <div className="script-list">
-              {Object.entries(project.packageInfo?.scripts ?? {}).map(([name, script]) => (
-                <button
-                  className="script-item"
-                  key={name}
-                  type="button"
-                  title={`执行 ${name}`}
-                  disabled={processState?.state === 'running' || processState?.state === 'starting'}
-                  onClick={() => void onRunScript(project, name)}
-                >
-                  <strong>{name}</strong>
-                  <code>{script}</code>
-                </button>
-              ))}
+              {Object.entries(project.packageInfo?.scripts ?? {}).map(([name]) => {
+                const scriptCommand = buildScriptCommand(project, name);
+                const scriptRunning = Boolean(findActiveRunByCommand(processStates, project.id, scriptCommand));
+                return (
+                  <button
+                    className="script-item"
+                    key={name}
+                    type="button"
+                    title={scriptRunning ? `${name} 运行中` : `执行 ${name}`}
+                    disabled={scriptRunning}
+                    onClick={() => void onRunScript(project, name)}
+                  >
+                    <strong>{name}{scriptRunning ? ' · 运行中' : ''}</strong>
+                    <code>{scriptCommand}</code>
+                  </button>
+                );
+              })}
             </div>
           </section>
         </div>
 
         <section className="log-section">
           <h3>日志</h3>
+          {runTabs.length > 0 ? (
+            <div className="log-tabs" role="tablist" aria-label="服务日志">
+              {runTabs.map((tab) => (
+                <button
+                  className={`log-tab ${activeTab?.runId === tab.runId ? 'active' : ''}`}
+                  key={tab.runId}
+                  role="tab"
+                  type="button"
+                  aria-selected={activeTab?.runId === tab.runId}
+                  title={tab.command}
+                  onClick={() => setSelectedRunId(tab.runId)}
+                >
+                  <span>{truncateCommand(tab.command)}</span>
+                  {isLiveRunState(tab.state) ? <em>运行中</em> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {activeTab ? (
+            <div className="log-run-header">
+              <code title={activeTab.command}>{activeTab.command}</code>
+              {isLiveRunState(activeTab.state) || activeTab.state === 'stopping' ? (
+                <button type="button" title="停止该服务" onClick={() => void onStopRun(project, activeTab.runId)}>
+                  <Square size={14} />
+                  <span>停止</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="logs">
-            {logs.length === 0 ? <span className="muted">暂无日志</span> : null}
-            {logs.map((entry) => (
-              <p className={entry.stream} key={`${entry.timestamp}-${entry.line}`}>
+            {!activeTab || activeLogs.length === 0 ? <span className="muted">暂无日志</span> : null}
+            {activeLogs.map((entry) => (
+              <p className={entry.stream} key={`${entry.runId}-${entry.timestamp}-${entry.line}`}>
                 <span>{entry.timestamp.slice(11, 19)}</span>
                 <code>{entry.line}</code>
               </p>
@@ -1385,10 +1465,12 @@ const GitBadge = ({ status }: GitBadgeProps): ReactElement => {
 };
 
 interface RunBadgeProps {
-  state: ProjectProcessState;
+  aggregate: ProjectRunAggregate;
 }
 
-const RunBadge = ({ state }: RunBadgeProps): ReactElement => <span className={`badge run-${state.state}`}>{statusText[state.state]}</span>;
+const RunBadge = ({ aggregate }: RunBadgeProps): ReactElement => (
+  <span className={`badge run-${aggregate.badgeState}`}>{formatAggregateStatus(aggregate)}</span>
+);
 
 const gitLabel = (status: GitStatus): string => {
   if (status.workingTree === 'not-git') {
@@ -1399,6 +1481,9 @@ const gitLabel = (status: GitStatus): string => {
 };
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '操作失败');
+
+const isLiveRunState = (state: ProjectProcessState['state']): boolean =>
+  state === 'starting' || state === 'running';
 
 const isProjectStartSettled = (state: ProjectProcessState): boolean =>
   Boolean(state.url) || ['failed', 'exited', 'idle', 'stopping'].includes(state.state);
@@ -1417,6 +1502,135 @@ const withoutProjectId = (projectIds: Set<string>, projectId: string): Set<strin
   next.delete(projectId);
   return next;
 };
+
+const buildScriptCommand = (project: ProjectInfo, scriptName: string): string => {
+  const packageManager = project.packageInfo?.packageManager;
+  return packageManager === 'pnpm' || packageManager === 'yarn' || packageManager === 'bun'
+    ? `${packageManager} ${scriptName}`
+    : `npm run ${scriptName}`;
+};
+
+interface ProjectRunAggregate {
+  badgeState: ProjectProcessState['state'];
+  liveCount: number;
+  primaryRun?: ProjectProcessState;
+  url?: string;
+}
+
+interface ProjectRunTab {
+  runId: string;
+  command: string;
+  state: ProjectProcessState['state'];
+  url?: string;
+}
+
+const getProjectRuns = (
+  processStates: Record<string, ProjectProcessState>,
+  projectId: string
+): ProjectProcessState[] =>
+  Object.values(processStates).filter((state) => state.projectId === projectId && state.runId);
+
+const findActiveRunByCommand = (
+  processStates: Record<string, ProjectProcessState>,
+  projectId: string,
+  command: string
+): ProjectProcessState | undefined =>
+  getProjectRuns(processStates, projectId).find(
+    (state) => state.command === command && isLiveRunState(state.state)
+  );
+
+const getProjectRunAggregate = (
+  processStates: Record<string, ProjectProcessState>,
+  projectId: string
+): ProjectRunAggregate => {
+  const runs = getProjectRuns(processStates, projectId);
+  const liveRuns = runs.filter((state) => isLiveRunState(state.state));
+  const stoppingRuns = runs.filter((state) => state.state === 'stopping');
+  const primaryRun =
+    liveRuns.find((state) => state.url) ??
+    liveRuns[0] ??
+    stoppingRuns[0] ??
+    runs.find((state) => state.url) ??
+    runs[runs.length - 1];
+
+  let badgeState: ProjectProcessState['state'] = 'idle';
+  if (liveRuns.some((state) => state.state === 'starting')) {
+    badgeState = 'starting';
+  } else if (liveRuns.some((state) => state.state === 'running')) {
+    badgeState = 'running';
+  } else if (stoppingRuns.length > 0) {
+    badgeState = 'stopping';
+  } else if (runs.some((state) => state.state === 'failed')) {
+    badgeState = 'failed';
+  } else if (runs.some((state) => state.state === 'exited')) {
+    badgeState = 'exited';
+  }
+
+  return {
+    badgeState,
+    liveCount: liveRuns.length,
+    primaryRun,
+    url: primaryRun?.url
+  };
+};
+
+const formatAggregateStatus = (aggregate: ProjectRunAggregate): string => {
+  if (aggregate.liveCount > 1 && aggregate.badgeState === 'running') {
+    return `运行中 ×${aggregate.liveCount}`;
+  }
+  if (aggregate.liveCount > 1 && aggregate.badgeState === 'starting') {
+    return `启动中 ×${aggregate.liveCount}`;
+  }
+  return statusText[aggregate.badgeState];
+};
+
+const collectProjectRunIds = (
+  processStates: Record<string, ProjectProcessState>,
+  logs: Record<string, ProjectLogEntry[]>,
+  projectId: string
+): string[] => {
+  const runIds = new Set<string>();
+  for (const state of getProjectRuns(processStates, projectId)) {
+    runIds.add(state.runId);
+  }
+  for (const [runId, entries] of Object.entries(logs)) {
+    if (entries.some((entry) => entry.projectId === projectId)) {
+      runIds.add(runId);
+    }
+  }
+  return Array.from(runIds);
+};
+
+const collectProjectRunTabs = (
+  processStates: Record<string, ProjectProcessState>,
+  logs: Record<string, ProjectLogEntry[]>,
+  projectId: string
+): ProjectRunTab[] => {
+  const runIds = collectProjectRunIds(processStates, logs, projectId);
+  return runIds
+    .map((runId) => {
+      const state = processStates[runId];
+      const entries = logs[runId] ?? [];
+      const command =
+        state?.command ??
+        entries.find((entry) => entry.stream === 'system' && entry.line.includes('执行启动命令'))?.line.replace(/^.*执行启动命令[:：]\s*/, '') ??
+        runId;
+      return {
+        runId,
+        command,
+        state: state?.state ?? 'exited',
+        url: state?.url
+      };
+    })
+    .sort((left, right) => {
+      const leftLive = isLiveRunState(left.state) ? 0 : 1;
+      const rightLive = isLiveRunState(right.state) ? 0 : 1;
+      return leftLive - rightLive || left.runId.localeCompare(right.runId);
+    });
+};
+
+const truncateCommand = (command: string, maxLength = 28): string =>
+  command.length > maxLength ? `${command.slice(0, maxLength - 1)}…` : command;
 
 const copyText = async (text: string): Promise<void> => {
   if (navigator.clipboard?.writeText) {
@@ -1444,7 +1658,7 @@ const copyText = async (text: string): Promise<void> => {
 function getProjectSearchRank(
   project: ProjectInfo,
   gitStatus: GitStatus | undefined,
-  processState: ProjectProcessState | undefined,
+  aggregate: ProjectRunAggregate,
   query: string
 ): number {
   const terms = normalizeSearchTerms(query);
@@ -1452,7 +1666,7 @@ function getProjectSearchRank(
     return 0;
   }
 
-  const fields = getProjectSearchFields(project, gitStatus, processState);
+  const fields = getProjectSearchFields(project, gitStatus, aggregate);
   const fullText = fields.map((field) => field.value).join(' ');
   if (!terms.every((term) => fullText.includes(term))) {
     return -1;
@@ -1472,7 +1686,7 @@ function normalizeSearchTerms(query: string): string[] {
 function getProjectSearchFields(
   project: ProjectInfo,
   gitStatus: GitStatus | undefined,
-  processState: ProjectProcessState | undefined
+  aggregate: ProjectRunAggregate
 ): SearchField[] {
   const pathSegments = project.path.split(/[\\/]/).filter(Boolean);
   const scripts = Object.entries(project.packageInfo?.scripts ?? {}).flatMap(([name, script]) => [name, script]);
@@ -1486,8 +1700,8 @@ function getProjectSearchFields(
     { value: gitStatus ? gitLabel(gitStatus) : '', weight: 6 },
     { value: project.startCommand, weight: 7 },
     { value: project.packageInfo?.packageManager ?? '', weight: 8 },
-    { value: statusText[processState?.state ?? 'idle'], weight: 9 },
-    { value: processState?.url ?? '', weight: 10 },
+    { value: formatAggregateStatus(aggregate), weight: 9 },
+    { value: aggregate.url ?? '', weight: 10 },
     ...scripts.map((script) => ({ value: script, weight: 11 }))
   ].map((field) => ({ ...field, value: field.value.toLowerCase() }));
 }

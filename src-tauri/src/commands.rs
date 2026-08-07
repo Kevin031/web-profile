@@ -58,16 +58,29 @@ pub async fn checkout_branch(
 pub async fn start_project(
     state: State<'_, AppState>,
     project_id: String,
+    command: Option<String>,
 ) -> Result<ProjectProcessState, String> {
-    state.controller.start_project(&project_id).await
+    state
+        .controller
+        .start_project(&project_id, command.as_deref())
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn stop_project(
     state: State<'_, AppState>,
     project_id: String,
+    run_id: String,
 ) -> Result<ProjectProcessState, String> {
-    state.controller.stop_project(&project_id).await
+    state.controller.stop_project(&project_id, &run_id).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn stop_project_runs(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<TaskResult, String> {
+    state.controller.stop_project_runs(&project_id).await
 }
 
 #[tauri::command]
@@ -79,8 +92,9 @@ pub async fn stop_all_projects(state: State<'_, AppState>) -> Result<TaskResult,
 pub async fn restart_project(
     state: State<'_, AppState>,
     project_id: String,
+    run_id: String,
 ) -> Result<ProjectProcessState, String> {
-    state.controller.restart_project(&project_id).await
+    state.controller.restart_project(&project_id, &run_id).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -96,16 +110,21 @@ pub async fn open_project(
 pub async fn open_project_url(
     state: State<'_, AppState>,
     project_id: String,
+    run_id: String,
 ) -> Result<TaskResult, String> {
-    state.controller.open_project_url(&project_id).await
+    state
+        .controller
+        .open_project_url(&project_id, &run_id)
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_project_logs(
     state: State<'_, AppState>,
     project_id: String,
+    run_id: String,
 ) -> Result<Vec<ProjectLogEntry>, String> {
-    state.controller.get_project_logs(&project_id).await
+    state.controller.get_project_logs(&project_id, &run_id).await
 }
 
 #[tauri::command(rename_all = "camelCase")]

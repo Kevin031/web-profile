@@ -142,6 +142,7 @@ pub struct BranchInfo {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectProcessState {
+    pub run_id: String,
     pub project_id: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,8 +163,10 @@ pub struct ProjectProcessState {
 
 impl ProjectProcessState {
     pub fn idle(project_id: impl Into<String>) -> Self {
+        let project_id = project_id.into();
         Self {
-            project_id: project_id.into(),
+            run_id: String::new(),
+            project_id,
             state: "idle".to_string(),
             pid: None,
             command: None,
@@ -179,6 +182,7 @@ impl ProjectProcessState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectLogEntry {
+    pub run_id: String,
     pub project_id: String,
     pub stream: String,
     pub line: String,

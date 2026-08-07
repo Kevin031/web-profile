@@ -32,6 +32,46 @@ describe('Tauri AppApi adapter', () => {
     expect(result).toEqual({ ok: true, message: 'ok' });
   });
 
+  it('maps process APIs with runId and optional start command', async () => {
+    const invokeMock = vi.fn();
+    const invoke: InvokeFunction = async <T>(command: string, args?: Record<string, unknown>) => {
+      invokeMock(command, args);
+      return createProcessState() as T;
+    };
+    const api = createTauriApi({ invoke, listen: createUnusedListen() });
+
+    await api.startProject('demo', 'pnpm build');
+    await api.stopProject('demo', 'demo#1');
+    await api.stopProjectRuns('demo');
+    await api.restartProject('demo', 'demo#1');
+    await api.openProjectUrl('demo', 'demo#1');
+    await api.getProjectLogs('demo', 'demo#1');
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'start_project', {
+      projectId: 'demo',
+      command: 'pnpm build'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'stop_project', {
+      projectId: 'demo',
+      runId: 'demo#1'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'stop_project_runs', {
+      projectId: 'demo'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(4, 'restart_project', {
+      projectId: 'demo',
+      runId: 'demo#1'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(5, 'open_project_url', {
+      projectId: 'demo',
+      runId: 'demo#1'
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(6, 'get_project_logs', {
+      projectId: 'demo',
+      runId: 'demo#1'
+    });
+  });
+
   it('opens the native directory picker with the requested location', async () => {
     const selectDirectory = vi.fn(async (): Promise<string | null> => 'D:/Workspace');
     const api = createTauriApi({
@@ -101,9 +141,11 @@ const createUnusedListen = (): ListenFunction => vi.fn(async () => vi.fn());
 const createUnusedInvoke = (): InvokeFunction => async <T>() => undefined as T;
 
 const createProcessState = (): ProjectProcessState => ({
+  runId: 'demo#1',
   projectId: 'demo',
   state: 'running',
-  pid: 1234
+  pid: 1234,
+  command: 'npm run dev'
 });
 
 const createMockAppApi = (): ReturnType<typeof createTauriApi> =>

@@ -130,22 +130,40 @@ impl DashboardController {
         Ok(self.git_service.checkout(&project.path, branch_name).await)
     }
 
-    pub async fn start_project(&self, project_id: &str) -> Result<ProjectProcessState, String> {
+    pub async fn start_project(
+        &self,
+        project_id: &str,
+        command: Option<&str>,
+    ) -> Result<ProjectProcessState, String> {
         let project = self.require_project(project_id).await?;
-        Ok(self.process_manager.start(&project).await)
+        Ok(self.process_manager.start(&project, command).await)
     }
 
-    pub async fn stop_project(&self, project_id: &str) -> Result<ProjectProcessState, String> {
-        self.process_manager.stop(project_id).await
+    pub async fn stop_project(
+        &self,
+        project_id: &str,
+        run_id: &str,
+    ) -> Result<ProjectProcessState, String> {
+        self.require_project(project_id).await?;
+        self.process_manager.stop(project_id, run_id).await
+    }
+
+    pub async fn stop_project_runs(&self, project_id: &str) -> Result<TaskResult, String> {
+        self.require_project(project_id).await?;
+        Ok(self.process_manager.stop_project_runs(project_id).await)
     }
 
     pub async fn stop_all_projects(&self) -> TaskResult {
         self.process_manager.stop_all().await
     }
 
-    pub async fn restart_project(&self, project_id: &str) -> Result<ProjectProcessState, String> {
+    pub async fn restart_project(
+        &self,
+        project_id: &str,
+        run_id: &str,
+    ) -> Result<ProjectProcessState, String> {
         let project = self.require_project(project_id).await?;
-        self.process_manager.restart(&project).await
+        self.process_manager.restart(&project, run_id).await
     }
 
     pub async fn open_project(
@@ -157,9 +175,16 @@ impl DashboardController {
         Ok(open_project(&self.app, &project.path, tool))
     }
 
-    pub async fn open_project_url(&self, project_id: &str) -> Result<TaskResult, String> {
+    pub async fn open_project_url(
+        &self,
+        project_id: &str,
+        run_id: &str,
+    ) -> Result<TaskResult, String> {
         self.require_project(project_id).await?;
-        let state = self.process_manager.get_state(project_id).await;
+        let state = self.process_manager.get_state(run_id).await;
+        if state.project_id != project_id {
+            return Err(format!("运行实例与项目不匹配：{run_id}"));
+        }
         let Some(url) = state.url else {
             return Ok(TaskResult {
                 ok: false,
@@ -171,9 +196,24 @@ impl DashboardController {
         Ok(open_http_url(&self.app, &url))
     }
 
-    pub async fn get_project_logs(&self, project_id: &str) -> Result<Vec<ProjectLogEntry>, String> {
+    pub async fn get_project_logs(
+        &self,
+        project_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<ProjectLogEntry>, String> {
         self.require_project(project_id).await?;
-        Ok(self.process_manager.get_logs(project_id).await)
+        let logs = self.process_manager.get_logs(run_id).await;
+        if logs
+            .iter()
+            .any(|entry| entry.project_id != project_id)
+        {
+            return Err(format!("运行实例与项目不匹配：{run_id}"));
+        }
+        let state = self.process_manager.get_state(run_id).await;
+        if !state.run_id.is_empty() && state.project_id != project_id {
+            return Err(format!("运行实例与项目不匹配：{run_id}"));
+        }
+        Ok(logs)
     }
 
     pub async fn update_project_config(

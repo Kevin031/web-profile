@@ -54,6 +54,7 @@ export interface BranchInfo {
 }
 
 export interface ProjectProcessState {
+  runId: string;
   projectId: string;
   state: ProjectRunState;
   pid?: number;
@@ -66,6 +67,7 @@ export interface ProjectProcessState {
 }
 
 export interface ProjectLogEntry {
+  runId: string;
   projectId: string;
   stream: 'stdout' | 'stderr' | 'system';
   line: string;
@@ -110,13 +112,14 @@ export interface AppApi {
   listBranches: (projectId: string) => Promise<BranchInfo[]>;
   pullProject: (projectId: string) => Promise<TaskResult>;
   checkoutBranch: (projectId: string, branchName: string) => Promise<TaskResult>;
-  startProject: (projectId: string) => Promise<ProjectProcessState>;
-  stopProject: (projectId: string) => Promise<ProjectProcessState>;
+  startProject: (projectId: string, command?: string) => Promise<ProjectProcessState>;
+  stopProject: (projectId: string, runId: string) => Promise<ProjectProcessState>;
+  stopProjectRuns: (projectId: string) => Promise<TaskResult>;
   stopAllProjects: () => Promise<TaskResult>;
-  restartProject: (projectId: string) => Promise<ProjectProcessState>;
+  restartProject: (projectId: string, runId: string) => Promise<ProjectProcessState>;
   openProject: (projectId: string, tool: ProjectOpenTool) => Promise<TaskResult>;
-  openProjectUrl: (projectId: string) => Promise<TaskResult>;
-  getProjectLogs: (projectId: string) => Promise<ProjectLogEntry[]>;
+  openProjectUrl: (projectId: string, runId: string) => Promise<TaskResult>;
+  getProjectLogs: (projectId: string, runId: string) => Promise<ProjectLogEntry[]>;
   updateProjectConfig: (projectId: string, patch: ProjectConfigPatch) => Promise<ProjectInfo[]>;
   updateAppConfig: (patch: Partial<AppConfig>) => Promise<AppConfig>;
   selectDirectory: (options: DirectoryPickerOptions) => Promise<string | null>;

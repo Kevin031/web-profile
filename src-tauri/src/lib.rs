@@ -44,6 +44,7 @@ pub fn run() {
             commands::checkout_branch,
             commands::start_project,
             commands::stop_project,
+            commands::stop_project_runs,
             commands::stop_all_projects,
             commands::restart_project,
             commands::open_project,

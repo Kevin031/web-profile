@@ -57,9 +57,13 @@ const mockGitStatuses: Record<string, GitStatus> = Object.fromEntries(
   ])
 );
 
+/** Mock 进程状态以 runId 为键 */
 const mockProcessStates: Record<string, ProjectProcessState> = {};
 
+/** Mock 日志以 runId 为键 */
 const mockLogs: Record<string, ProjectLogEntry[]> = {};
+
+let mockRunGeneration = 0;
 
 export const createMockApi = (): AppApi => {
   const processListeners = new Set<(state: ProjectProcessState) => void>();
@@ -69,21 +73,22 @@ export const createMockApi = (): AppApi => {
   let projects = syncProjectFlags([...mockProjects], config);
 
   const emitState = (state: ProjectProcessState): void => {
-    mockProcessStates[state.projectId] = state;
+    mockProcessStates[state.runId] = state;
     for (const listener of processListeners) {
       listener(state);
     }
   };
 
   const emitLog = (entry: ProjectLogEntry): void => {
-    mockLogs[entry.projectId] = [...(mockLogs[entry.projectId] ?? []), entry].slice(-config.logLineLimit);
+    mockLogs[entry.runId] = [...(mockLogs[entry.runId] ?? []), entry].slice(-config.logLineLimit);
     for (const listener of logListeners) {
       listener(entry);
     }
   };
 
-  const appendSystemLog = (projectId: string, line: string): void => {
+  const appendSystemLog = (runId: string, projectId: string, line: string): void => {
     emitLog({
+      runId,
       projectId,
       stream: 'system',
       line,
@@ -99,19 +104,52 @@ export const createMockApi = (): AppApi => {
     return project;
   };
 
-  const startMockProject = (projectId: string): ProjectProcessState => {
+  const isActiveState = (state: ProjectProcessState['state']): boolean =>
+    state === 'starting' || state === 'running';
+
+  const findActiveRun = (projectId: string, command: string): ProjectProcessState | undefined =>
+    Object.values(mockProcessStates).find(
+      (state) => state.projectId === projectId && state.command === command && isActiveState(state.state)
+    );
+
+  const startMockProject = (projectId: string, command?: string): ProjectProcessState => {
     const project = findProject(projectId);
+    const commandLine = (command?.trim() || project.startCommand).trim();
+    if (!commandLine) {
+      mockRunGeneration += 1;
+      const runId = `${projectId}#${mockRunGeneration}`;
+      const failed: ProjectProcessState = {
+        runId,
+        projectId,
+        state: 'failed',
+        error: '启动命令为空',
+        exitedAt: now()
+      };
+      emitState(failed);
+      return failed;
+    }
+
+    const existing = findActiveRun(projectId, commandLine);
+    if (existing) {
+      return existing;
+    }
+
+    mockRunGeneration += 1;
+    const runId = `${projectId}#${mockRunGeneration}`;
+    const portOffset = mockRunGeneration;
     const state: ProjectProcessState = {
+      runId,
       projectId,
       state: 'running',
       pid: Math.floor(10_000 + Math.random() * 80_000),
-      command: project.startCommand,
+      command: commandLine,
       startedAt: now(),
-      url: `http://localhost:${5173 + projects.findIndex((item) => item.id === projectId)}`
+      url: `http://localhost:${5173 + portOffset}`
     };
     emitState(state);
-    appendSystemLog(projectId, `Mock：执行启动命令 ${project.startCommand}`);
+    appendSystemLog(runId, projectId, `Mock：执行启动命令 ${commandLine}`);
     emitLog({
+      runId,
       projectId,
       stream: 'stdout',
       line: `Local: ${state.url}`,
@@ -120,16 +158,31 @@ export const createMockApi = (): AppApi => {
     return state;
   };
 
-  const stopMockProject = (projectId: string): ProjectProcessState => {
+  const stopMockRun = (projectId: string, runId: string): ProjectProcessState => {
+    const current = mockProcessStates[runId];
+    if (current && current.projectId !== projectId) {
+      throw new Error(`运行实例与项目不匹配：${runId}`);
+    }
     const state: ProjectProcessState = {
-      ...mockProcessStates[projectId],
+      ...current,
+      runId,
       projectId,
       state: 'exited',
       exitedAt: now()
     };
     emitState(state);
-    appendSystemLog(projectId, 'Mock：项目进程已停止');
+    appendSystemLog(runId, projectId, 'Mock：项目进程已停止');
     return state;
+  };
+
+  const stopMockProjectRuns = (projectId: string): TaskResult => {
+    const activeRuns = Object.values(mockProcessStates).filter(
+      (state) => state.projectId === projectId && isActiveState(state.state)
+    );
+    activeRuns.forEach((state) => stopMockRun(projectId, state.runId));
+    return activeRuns.length > 0
+      ? { ok: true, message: `Mock：已停止该项目的 ${activeRuns.length} 个服务` }
+      : { ok: true, message: 'Mock：当前项目没有运行中的服务' };
   };
 
   return {
@@ -138,7 +191,7 @@ export const createMockApi = (): AppApi => {
       projectRootAvailable: true,
       projects,
       gitStatuses: mockGitStatuses,
-      processStates: mockProcessStates
+      processStates: { ...mockProcessStates }
     }),
     scanProjects: async (): Promise<ProjectInfo[]> => {
       const update = { projects, gitStatuses: mockGitStatuses };
@@ -156,7 +209,12 @@ export const createMockApi = (): AppApi => {
       }));
     },
     pullProject: async (projectId: string): Promise<TaskResult> => {
-      appendSystemLog(projectId, 'Mock：git pull --ff-only 已完成');
+      const active = Object.values(mockProcessStates).find(
+        (state) => state.projectId === projectId && isActiveState(state.state)
+      );
+      if (active) {
+        appendSystemLog(active.runId, projectId, 'Mock：git pull --ff-only 已完成');
+      }
       mockGitStatuses[projectId] = {
         ...mockGitStatuses[projectId],
         behind: 0
@@ -169,27 +227,36 @@ export const createMockApi = (): AppApi => {
         branch: branchName,
         workingTree: 'clean'
       };
-      appendSystemLog(projectId, `Mock：已切换到 ${branchName}`);
+      const active = Object.values(mockProcessStates).find(
+        (state) => state.projectId === projectId && isActiveState(state.state)
+      );
+      if (active) {
+        appendSystemLog(active.runId, projectId, `Mock：已切换到 ${branchName}`);
+      }
       return { ok: true, message: `Mock：已切换到 ${branchName}` };
     },
-    startProject: async (projectId: string): Promise<ProjectProcessState> => {
-      return startMockProject(projectId);
+    startProject: async (projectId: string, command?: string): Promise<ProjectProcessState> => {
+      return startMockProject(projectId, command);
     },
-    stopProject: async (projectId: string): Promise<ProjectProcessState> => {
-      return stopMockProject(projectId);
+    stopProject: async (projectId: string, runId: string): Promise<ProjectProcessState> => {
+      return stopMockRun(projectId, runId);
+    },
+    stopProjectRuns: async (projectId: string): Promise<TaskResult> => {
+      return stopMockProjectRuns(projectId);
     },
     stopAllProjects: async (): Promise<TaskResult> => {
-      const runningProjectIds = Object.values(mockProcessStates)
-        .filter((state) => state.state === 'running')
-        .map((state) => state.projectId);
-      runningProjectIds.forEach(stopMockProject);
-      return runningProjectIds.length > 0
-        ? { ok: true, message: `Mock：已停止全部 ${runningProjectIds.length} 个运行中的项目` }
+      const activeRuns = Object.values(mockProcessStates).filter((state) => isActiveState(state.state));
+      activeRuns.forEach((state) => stopMockRun(state.projectId, state.runId));
+      return activeRuns.length > 0
+        ? { ok: true, message: `Mock：已停止全部 ${activeRuns.length} 个运行中的服务` }
         : { ok: true, message: 'Mock：当前没有运行中的项目' };
     },
-    restartProject: async (projectId: string): Promise<ProjectProcessState> => {
-      appendSystemLog(projectId, 'Mock：正在重启项目');
-      return startMockProject(projectId);
+    restartProject: async (projectId: string, runId: string): Promise<ProjectProcessState> => {
+      const previous = mockProcessStates[runId];
+      const command = previous?.command;
+      stopMockRun(projectId, runId);
+      appendSystemLog(runId, projectId, 'Mock：正在重启项目');
+      return startMockProject(projectId, command);
     },
     openProject: async (projectId: string, tool: ProjectOpenTool): Promise<TaskResult> => {
       const project = findProject(projectId);
@@ -202,15 +269,25 @@ export const createMockApi = (): AppApi => {
       };
       return { ok: true, message: `Mock：已使用${toolLabel[tool]}打开 ${project.path}` };
     },
-    openProjectUrl: async (projectId: string): Promise<TaskResult> => {
-      const url = mockProcessStates[projectId]?.url;
+    openProjectUrl: async (projectId: string, runId: string): Promise<TaskResult> => {
+      const state = mockProcessStates[runId];
+      if (!state || state.projectId !== projectId) {
+        return { ok: false, message: '尚未获取到项目访问地址' };
+      }
+      const url = state.url;
       if (!url) {
         return { ok: false, message: '尚未获取到项目访问地址' };
       }
       window.open(url, '_blank', 'noopener,noreferrer');
       return { ok: true, message: `已打开：${url}` };
     },
-    getProjectLogs: async (projectId: string): Promise<ProjectLogEntry[]> => mockLogs[projectId] ?? [],
+    getProjectLogs: async (projectId: string, runId: string): Promise<ProjectLogEntry[]> => {
+      const entries = mockLogs[runId] ?? [];
+      if (entries.some((entry) => entry.projectId !== projectId)) {
+        throw new Error(`运行实例与项目不匹配：${runId}`);
+      }
+      return entries;
+    },
     updateProjectConfig: async (projectId: string, patch: ProjectConfigPatch): Promise<ProjectInfo[]> => {
       const project = findProject(projectId);
       config = {

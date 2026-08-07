@@ -1571,6 +1571,89 @@ tbody tr.selected:hover td {
   min-height: 260px;
 }
 
+.log-tabs {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.log-tab {
+  display: inline-flex;
+  max-width: 180px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.log-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-tab em {
+  flex: 0 0 auto;
+  color: #13722a;
+  font-style: normal;
+  font-size: 11px;
+}
+
+.log-tab:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.log-tab.active {
+  border-color: rgb(0 117 222 / 36%);
+  background: var(--primary-soft);
+  color: var(--primary-active);
+}
+
+.log-run-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: #f7f6f3;
+}
+
+.log-run-header code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-run-header button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .logs {
   min-width: 0;
   max-width: 100%;
