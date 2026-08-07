@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -17,8 +18,9 @@ const environment = {
     ? process.env.PATH
     : [cargoBin, process.env.PATH].filter(Boolean).join(delimiter)
 };
-const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(npxCommand, ['tauri', ...process.argv.slice(2)], {
+const require = createRequire(import.meta.url);
+const tauriCli = require.resolve('@tauri-apps/cli/tauri.js');
+const result = spawnSync(process.execPath, [tauriCli, ...process.argv.slice(2)], {
   cwd: new URL('..', import.meta.url),
   env: environment,
   stdio: 'inherit'
