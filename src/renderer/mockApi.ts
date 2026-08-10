@@ -137,6 +137,8 @@ export const createMockApi = (): AppApi => {
     mockRunGeneration += 1;
     const runId = `${projectId}#${mockRunGeneration}`;
     const portOffset = mockRunGeneration;
+    const adminUrl = `http://localhost:${5173 + portOffset}`;
+    const apiUrl = `http://localhost:${3000 + portOffset}/api`;
     const state: ProjectProcessState = {
       runId,
       projectId,
@@ -144,7 +146,7 @@ export const createMockApi = (): AppApi => {
       pid: Math.floor(10_000 + Math.random() * 80_000),
       command: commandLine,
       startedAt: now(),
-      url: `http://localhost:${5173 + portOffset}`
+      urls: [adminUrl, apiUrl]
     };
     emitState(state);
     appendSystemLog(runId, projectId, `Mock：执行启动命令 ${commandLine}`);
@@ -152,7 +154,14 @@ export const createMockApi = (): AppApi => {
       runId,
       projectId,
       stream: 'stdout',
-      line: `Local: ${state.url}`,
+      line: `[dev] 管理端：${adminUrl}`,
+      timestamp: now()
+    });
+    emitLog({
+      runId,
+      projectId,
+      stream: 'stdout',
+      line: `[dev] API：${apiUrl}`,
       timestamp: now()
     });
     return state;
@@ -269,17 +278,21 @@ export const createMockApi = (): AppApi => {
       };
       return { ok: true, message: `Mock：已使用${toolLabel[tool]}打开 ${project.path}` };
     },
-    openProjectUrl: async (projectId: string, runId: string): Promise<TaskResult> => {
+    openProjectUrl: async (projectId: string, runId: string, url?: string): Promise<TaskResult> => {
       const state = mockProcessStates[runId];
       if (!state || state.projectId !== projectId) {
         return { ok: false, message: '尚未获取到项目访问地址' };
       }
-      const url = state.url;
-      if (!url) {
+      const urls = state.urls ?? [];
+      if (urls.length === 0) {
         return { ok: false, message: '尚未获取到项目访问地址' };
       }
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return { ok: true, message: `已打开：${url}` };
+      const target = url ?? urls[0];
+      if (!urls.includes(target)) {
+        return { ok: false, message: `地址不在已识别列表中：${target}` };
+      }
+      window.open(target, '_blank', 'noopener,noreferrer');
+      return { ok: true, message: `已打开：${target}` };
     },
     getProjectLogs: async (projectId: string, runId: string): Promise<ProjectLogEntry[]> => {
       const entries = mockLogs[runId] ?? [];

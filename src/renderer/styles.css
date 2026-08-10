@@ -410,6 +410,18 @@ select {
   background: #e4f7f2;
 }
 
+.update-button.check-only {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.update-button.check-only:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
 .update-button:disabled {
   cursor: wait;
   opacity: 0.75;
@@ -1288,6 +1300,17 @@ tbody tr.selected:hover td {
   white-space: nowrap;
 }
 
+.url-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.url-cell {
+  white-space: normal;
+}
+
 .url-open-button {
   display: inline-flex;
   width: 100%;
@@ -1511,6 +1534,13 @@ tbody tr.selected:hover td {
 
 .visit-section {
   min-width: 0;
+}
+
+.visit-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .visit-button,

@@ -62,7 +62,7 @@ export interface ProjectProcessState {
   startedAt?: string;
   exitedAt?: string;
   exitCode?: number | null;
-  url?: string;
+  urls?: string[];
   error?: string;
 }
 
@@ -118,7 +118,7 @@ export interface AppApi {
   stopAllProjects: () => Promise<TaskResult>;
   restartProject: (projectId: string, runId: string) => Promise<ProjectProcessState>;
   openProject: (projectId: string, tool: ProjectOpenTool) => Promise<TaskResult>;
-  openProjectUrl: (projectId: string, runId: string) => Promise<TaskResult>;
+  openProjectUrl: (projectId: string, runId: string, url?: string) => Promise<TaskResult>;
   getProjectLogs: (projectId: string, runId: string) => Promise<ProjectLogEntry[]>;
   updateProjectConfig: (projectId: string, patch: ProjectConfigPatch) => Promise<ProjectInfo[]>;
   updateAppConfig: (patch: Partial<AppConfig>) => Promise<AppConfig>;

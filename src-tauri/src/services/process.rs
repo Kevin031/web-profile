@@ -18,14 +18,16 @@ use tokio::{
     time::sleep,
 };
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 use crate::{
     models::{ProjectInfo, ProjectLogEntry, ProjectProcessState, TaskResult},
     utils::{
-        command::run_command,
-        log::{extract_dev_server_url, strip_ansi},
+        command::{run_command, CommandResult},
+        log::{merge_dev_server_url, strip_ansi},
     },
 };
 
@@ -155,7 +157,7 @@ impl ProcessManager {
                 started_at: None,
                 exited_at: Some(Utc::now().to_rfc3339()),
                 exit_code: None,
-                url: None,
+                urls: Vec::new(),
                 error: Some("启动命令为空".to_string()),
             };
             self.replace_record(state.clone(), generation, true).await;
@@ -173,7 +175,7 @@ impl ProcessManager {
             started_at: Some(Utc::now().to_rfc3339()),
             exited_at: None,
             exit_code: None,
-            url: None,
+            urls: Vec::new(),
             error: None,
         };
         self.replace_record(starting, generation, false).await;
@@ -206,6 +208,9 @@ impl ProcessManager {
             .kill_on_drop(false);
         #[cfg(windows)]
         command.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+        // 独立进程组，停止时可用负 PID 一次杀掉整棵进程树
+        #[cfg(unix)]
+        command.as_std_mut().process_group(0);
 
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -219,7 +224,7 @@ impl ProcessManager {
                     started_at: Some(Utc::now().to_rfc3339()),
                     exited_at: Some(Utc::now().to_rfc3339()),
                     exit_code: None,
-                    url: None,
+                    urls: Vec::new(),
                     error: Some(error.to_string()),
                 };
                 self.replace_record(failed.clone(), generation, true).await;
@@ -241,7 +246,7 @@ impl ProcessManager {
             started_at: Some(Utc::now().to_rfc3339()),
             exited_at: None,
             exit_code: None,
-            url: None,
+            urls: Vec::new(),
             error: None,
         };
         self.replace_record(running.clone(), generation, false)
@@ -315,15 +320,7 @@ impl ProcessManager {
         self.emit_value("process-state", &current_state);
 
         if let Some(pid) = pid {
-            let pid_string = pid.to_string();
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let result = run_command(
-                "taskkill",
-                &["/PID", &pid_string, "/T", "/F"],
-                &cwd,
-                Duration::from_secs(10),
-            )
-            .await;
+            let result = terminate_process_tree(pid).await;
             if result.exit_code != 0 {
                 for _ in 0..10 {
                     if self.has_generation_exited(run_id, generation).await {
@@ -333,7 +330,7 @@ impl ProcessManager {
                 }
                 if !self.has_generation_exited(run_id, generation).await {
                     let error = if result.stderr.trim().is_empty() {
-                        format!("taskkill 退出码：{}", result.exit_code)
+                        format!("停止进程退出码：{}", result.exit_code)
                     } else {
                         result.stderr.trim().to_string()
                     };
@@ -363,7 +360,7 @@ impl ProcessManager {
             started_at: current_state.started_at.clone(),
             exited_at: Some(Utc::now().to_rfc3339()),
             exit_code: Some(0),
-            url: current_state.url.clone(),
+            urls: current_state.urls.clone(),
             error: None,
         };
         let mut processes = self.processes.lock().await;
@@ -496,16 +493,17 @@ impl ProcessManager {
             else {
                 return;
             };
-            let next_url = extract_dev_server_url(&clean_line, record.state.url.as_deref());
-            next_url.map(|url| {
-                record.state.url = Some(url);
-                record.state.clone()
-            })
+            if merge_dev_server_url(&clean_line, &mut record.state.urls) {
+                Some(record.state.clone())
+            } else {
+                None
+            }
         };
         if let Some(state) = state_update {
             self.emit_value("process-state", &state);
         }
-        self.append_log(run_id, project_id, stream, clean_line).await;
+        self.append_log(run_id, project_id, stream, clean_line)
+            .await;
     }
 
     async fn handle_exit(
@@ -605,6 +603,34 @@ impl ProcessManager {
     }
 }
 
+/// 终止受管进程及其子进程树。
+async fn terminate_process_tree(pid: u32) -> CommandResult {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let timeout = Duration::from_secs(10);
+    #[cfg(windows)]
+    {
+        let pid_string = pid.to_string();
+        run_command(
+            "taskkill",
+            &["/PID", &pid_string, "/T", "/F"],
+            &cwd,
+            timeout,
+        )
+        .await
+    }
+    #[cfg(unix)]
+    {
+        // 负 PID：向启动时创建的独立进程组发送 SIGKILL
+        let process_group = format!("-{pid}");
+        let group_result = run_command("kill", &["-KILL", &process_group], &cwd, timeout).await;
+        if group_result.exit_code == 0 {
+            return group_result;
+        }
+        // 回退：仅杀根进程（例如修复前启动、未建独立进程组的实例）
+        run_command("kill", &["-KILL", &pid.to_string()], &cwd, timeout).await
+    }
+}
+
 #[cfg(test)]
 fn make_fixture_project(id: &str, path: &str, start_command: &str) -> ProjectInfo {
     ProjectInfo {
@@ -660,7 +686,7 @@ mod tests {
                 started_at: Some("now".to_string()),
                 exited_at: None,
                 exit_code: None,
-                url: None,
+                urls: Vec::new(),
                 error: None,
             };
             manager.processes.lock().await.insert(
@@ -689,6 +715,156 @@ mod tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use std::{fs, sync::Arc, time::Duration};
+
+    use tempfile::tempdir;
+    use tokio::time::sleep;
+
+    use super::{make_fixture_project, ProcessManager};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn starts_streams_and_stops_a_unix_process_tree() {
+        if std::process::Command::new("which")
+            .arg("node")
+            .output()
+            .map_or(true, |output| !output.status.success())
+        {
+            return;
+        }
+        let temp = tempdir().expect("应创建临时目录");
+        fs::write(
+            temp.path().join("fixture.js"),
+            "console.log('Local: http://localhost:4321/'); setInterval(() => {}, 1000);",
+        )
+        .expect("应写入进程 fixture");
+        let project =
+            make_fixture_project("fixture", &temp.path().to_string_lossy(), "node fixture.js");
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+
+        let running = manager.start(&project, None).await;
+        assert_eq!(running.state, "running");
+        let run_id = running.run_id.clone();
+        sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            manager.get_state(&run_id).await.urls,
+            vec!["http://localhost:4321/".to_string()]
+        );
+        assert!(manager
+            .get_logs(&run_id)
+            .await
+            .iter()
+            .any(|entry| entry.line.contains("localhost:4321")));
+        assert!(manager
+            .get_logs(&run_id)
+            .await
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node fixture.js")));
+
+        let stopped = manager
+            .stop(&project.id, &run_id)
+            .await
+            .expect("停止应成功");
+        assert_eq!(stopped.state, "exited");
+        assert!(!manager.has_running_projects().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runs_two_commands_for_same_project_with_isolated_logs() {
+        if std::process::Command::new("which")
+            .arg("node")
+            .output()
+            .map_or(true, |output| !output.status.success())
+        {
+            return;
+        }
+        let temp = tempdir().expect("应创建临时目录");
+        fs::write(
+            temp.path().join("a.js"),
+            "console.log('Local: http://localhost:4001/'); setInterval(() => {}, 1000);",
+        )
+        .expect("应写入 fixture a");
+        fs::write(
+            temp.path().join("b.js"),
+            "console.log('Local: http://localhost:4002/'); setInterval(() => {}, 1000);",
+        )
+        .expect("应写入 fixture b");
+        let project = make_fixture_project("multi", &temp.path().to_string_lossy(), "node a.js");
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+
+        let first = manager.start(&project, Some("node a.js")).await;
+        let second = manager.start(&project, Some("node b.js")).await;
+        assert_eq!(first.state, "running");
+        assert_eq!(second.state, "running");
+        assert_ne!(first.run_id, second.run_id);
+
+        let duplicate = manager.start(&project, Some("node a.js")).await;
+        assert_eq!(duplicate.run_id, first.run_id);
+
+        sleep(Duration::from_millis(500)).await;
+
+        let first_logs = manager.get_logs(&first.run_id).await;
+        let second_logs = manager.get_logs(&second.run_id).await;
+        assert!(first_logs
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node a.js")));
+        assert!(second_logs
+            .iter()
+            .any(|entry| entry.line.contains("执行启动命令：node b.js")));
+        assert!(first_logs.iter().any(|entry| entry.line.contains("4001")));
+        assert!(second_logs.iter().any(|entry| entry.line.contains("4002")));
+        assert!(!first_logs.iter().any(|entry| entry.line.contains("4002")));
+        assert!(!second_logs.iter().any(|entry| entry.line.contains("4001")));
+
+        manager
+            .stop(&project.id, &first.run_id)
+            .await
+            .expect("停止第一个服务应成功");
+        assert_eq!(manager.get_state(&second.run_id).await.state, "running");
+
+        manager.stop_project_runs(&project.id).await;
+        assert!(!manager.has_running_projects().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn collects_multiple_urls_from_one_process() {
+        if std::process::Command::new("which")
+            .arg("node")
+            .output()
+            .map_or(true, |output| !output.status.success())
+        {
+            return;
+        }
+        let temp = tempdir().expect("应创建临时目录");
+        fs::write(
+            temp.path().join("fixture.js"),
+            "console.log('[dev] 管理端：http://localhost:5175');\nconsole.log('[dev] API：http://localhost:3001/api');\nsetInterval(() => {}, 1000);",
+        )
+        .expect("应写入进程 fixture");
+        let project =
+            make_fixture_project("multi-url", &temp.path().to_string_lossy(), "node fixture.js");
+        let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
+
+        let running = manager.start(&project, None).await;
+        assert_eq!(running.state, "running");
+        let run_id = running.run_id.clone();
+        sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            manager.get_state(&run_id).await.urls,
+            vec![
+                "http://localhost:5175".to_string(),
+                "http://localhost:3001/api".to_string()
+            ]
+        );
+
+        manager
+            .stop(&project.id, &run_id)
+            .await
+            .expect("停止应成功");
+    }
+}
+
 #[cfg(all(test, windows))]
 mod windows_tests {
     use std::{fs, sync::Arc, time::Duration};
@@ -713,11 +889,8 @@ mod windows_tests {
             "console.log('Local: http://localhost:4321/'); setInterval(() => {}, 1000);",
         )
         .expect("应写入进程 fixture");
-        let project = make_fixture_project(
-            "fixture",
-            &temp.path().to_string_lossy(),
-            "node fixture.js",
-        );
+        let project =
+            make_fixture_project("fixture", &temp.path().to_string_lossy(), "node fixture.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
         let running = manager.start(&project, None).await;
@@ -725,8 +898,8 @@ mod windows_tests {
         let run_id = running.run_id.clone();
         sleep(Duration::from_millis(500)).await;
         assert_eq!(
-            manager.get_state(&run_id).await.url.as_deref(),
-            Some("http://localhost:4321/")
+            manager.get_state(&run_id).await.urls,
+            vec!["http://localhost:4321/".to_string()]
         );
         assert!(manager
             .get_logs(&run_id)
@@ -789,12 +962,8 @@ mod windows_tests {
         assert!(second_logs
             .iter()
             .any(|entry| entry.line.contains("执行启动命令：node b.js")));
-        assert!(first_logs
-            .iter()
-            .any(|entry| entry.line.contains("4001")));
-        assert!(second_logs
-            .iter()
-            .any(|entry| entry.line.contains("4002")));
+        assert!(first_logs.iter().any(|entry| entry.line.contains("4001")));
+        assert!(second_logs.iter().any(|entry| entry.line.contains("4002")));
         assert!(!first_logs.iter().any(|entry| entry.line.contains("4002")));
         assert!(!second_logs.iter().any(|entry| entry.line.contains("4001")));
 
@@ -804,9 +973,7 @@ mod windows_tests {
             .expect("停止第一个服务应成功");
         assert_eq!(manager.get_state(&second.run_id).await.state, "running");
 
-        manager
-            .stop_project_runs(&project.id)
-            .await;
+        manager.stop_project_runs(&project.id).await;
         assert!(!manager.has_running_projects().await);
     }
 }

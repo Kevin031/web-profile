@@ -155,8 +155,8 @@ pub struct ProjectProcessState {
     pub exited_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub urls: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -173,7 +173,7 @@ impl ProjectProcessState {
             started_at: None,
             exited_at: None,
             exit_code: None,
-            url: None,
+            urls: Vec::new(),
             error: None,
         }
     }

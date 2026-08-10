@@ -10,41 +10,59 @@ static LOCAL_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[\d.]+):\d+[^\s]*)")
         .expect("本地 URL 正则应有效")
 });
+static LOCAL_LINE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bLocal\b").expect("Local 正则应有效")
+});
 const DEV_TOOL_PATHS: [&str; 2] = ["/__unocss/", "/__inspect/"];
 
 pub fn strip_ansi(text: &str) -> String {
     ANSI_ESCAPE_PATTERN.replace_all(text, "").into_owned()
 }
 
-pub fn extract_dev_server_url(line: &str, current_url: Option<&str>) -> Option<String> {
-    let raw_url = LOCAL_URL_PATTERN.captures(line)?.get(1)?.as_str();
-    let url = raw_url.replacen("http://0.0.0.0", "http://localhost", 1);
+/// 从日志行合并本地开发地址；有变更返回 true。
+pub fn merge_dev_server_url(line: &str, urls: &mut Vec<String>) -> bool {
+    let Some(captures) = LOCAL_URL_PATTERN.captures(line) else {
+        return false;
+    };
+    let raw_url = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
+    let rewritten = raw_url.replacen("http://0.0.0.0", "http://localhost", 1);
+    let candidate_is_dev_tool = is_dev_tool_url(&rewritten);
+    let url = normalize_dev_server_url(&rewritten);
+    let is_local_line = LOCAL_LINE_PATTERN.is_match(line);
 
-    if Regex::new(r"(?i)\bLocal\b")
-        .expect("Local 正则应有效")
-        .is_match(line)
+    if candidate_is_dev_tool {
+        let has_business = urls.iter().any(|existing| !is_dev_tool_url(existing));
+        if has_business {
+            return false;
+        }
+    }
+
+    if let Some(index) = urls
+        .iter()
+        .position(|existing| same_endpoint(existing, &url))
     {
-        return Some(normalize_dev_server_url(&url));
+        if !is_local_line {
+            return false;
+        }
+        let mut changed = false;
+        if urls[index] != url {
+            urls[index] = url;
+            changed = true;
+        }
+        if index != 0 {
+            let item = urls.remove(index);
+            urls.insert(0, item);
+            changed = true;
+        }
+        return changed;
     }
 
-    if is_dev_tool_url(&url) {
-        return match current_url {
-            Some(current) if !is_dev_tool_url(current) => None,
-            _ => Some(normalize_dev_server_url(&url)),
-        };
+    if is_local_line {
+        urls.insert(0, url);
+    } else {
+        urls.push(url);
     }
-
-    if current_url.is_some_and(|current| {
-        !is_dev_tool_url(current)
-            && (current.starts_with("http://localhost")
-                || current.starts_with("https://localhost")
-                || current.starts_with("http://127.0.0.1")
-                || current.starts_with("https://127.0.0.1"))
-    }) {
-        return None;
-    }
-
-    Some(normalize_dev_server_url(&url))
+    true
 }
 
 fn normalize_dev_server_url(url: &str) -> String {
@@ -65,9 +83,23 @@ fn is_dev_tool_url(url: &str) -> bool {
     DEV_TOOL_PATHS.iter().any(|path| url.contains(path))
 }
 
+fn same_endpoint(left: &str, right: &str) -> bool {
+    match (endpoint_key(left), endpoint_key(right)) {
+        (Some(a), Some(b)) => a == b,
+        _ => left.trim_end_matches('/') == right.trim_end_matches('/'),
+    }
+}
+
+fn endpoint_key(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default()?;
+    Some(format!("{}://{}:{}", parsed.scheme(), host, port))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extract_dev_server_url, strip_ansi};
+    use super::{merge_dev_server_url, strip_ansi};
 
     #[test]
     fn strips_ansi_sequences() {
@@ -76,18 +108,97 @@ mod tests {
 
     #[test]
     fn extracts_and_normalizes_local_urls() {
-        assert_eq!(
-            extract_dev_server_url("Local: http://0.0.0.0:5173/", None).as_deref(),
-            Some("http://localhost:5173/")
-        );
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url("Local: http://0.0.0.0:5173/", &mut urls));
+        assert_eq!(urls, vec!["http://localhost:5173/".to_string()]);
     }
 
     #[test]
     fn normalizes_inspector_urls() {
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url(
+            "Inspect: http://localhost:4173/__inspect/?foo=bar",
+            &mut urls
+        ));
+        assert_eq!(urls, vec!["http://localhost:4173/".to_string()]);
+    }
+
+    #[test]
+    fn keeps_multiple_ports_from_one_log_stream() {
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url(
+            "[dev] 管理端：http://localhost:5175",
+            &mut urls
+        ));
+        assert!(merge_dev_server_url(
+            "[dev] API：http://localhost:3001/api",
+            &mut urls
+        ));
         assert_eq!(
-            extract_dev_server_url("Inspect: http://localhost:4173/__inspect/?foo=bar", None)
-                .as_deref(),
-            Some("http://localhost:4173/")
+            urls,
+            vec![
+                "http://localhost:5175".to_string(),
+                "http://localhost:3001/api".to_string()
+            ]
         );
+    }
+
+    #[test]
+    fn dedupes_same_port_with_trailing_slash() {
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url("http://localhost:5175", &mut urls));
+        assert!(!merge_dev_server_url("http://localhost:5175/", &mut urls));
+        assert_eq!(urls, vec!["http://localhost:5175".to_string()]);
+    }
+
+    #[test]
+    fn local_line_moves_matching_url_to_front() {
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url(
+            "[dev] API：http://localhost:3001/api",
+            &mut urls
+        ));
+        assert!(merge_dev_server_url(
+            "[dev] 管理端：http://localhost:5175",
+            &mut urls
+        ));
+        assert!(merge_dev_server_url(
+            "  ➜  Local:   http://localhost:5175/",
+            &mut urls
+        ));
+        assert_eq!(
+            urls,
+            vec![
+                "http://localhost:5175/".to_string(),
+                "http://localhost:3001/api".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn local_line_inserts_new_port_at_front() {
+        let mut urls = Vec::new();
+        assert!(merge_dev_server_url("http://localhost:3001/api", &mut urls));
+        assert!(merge_dev_server_url(
+            "Local: http://localhost:5175/",
+            &mut urls
+        ));
+        assert_eq!(
+            urls,
+            vec![
+                "http://localhost:5175/".to_string(),
+                "http://localhost:3001/api".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dev_tool_url_does_not_override_business_urls() {
+        let mut urls = vec!["http://localhost:5173/".to_string()];
+        assert!(!merge_dev_server_url(
+            "Inspect: http://localhost:4173/__inspect/",
+            &mut urls
+        ));
+        assert_eq!(urls, vec!["http://localhost:5173/".to_string()]);
     }
 }

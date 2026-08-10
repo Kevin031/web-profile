@@ -111,10 +111,11 @@ pub async fn open_project_url(
     state: State<'_, AppState>,
     project_id: String,
     run_id: String,
+    url: Option<String>,
 ) -> Result<TaskResult, String> {
     state
         .controller
-        .open_project_url(&project_id, &run_id)
+        .open_project_url(&project_id, &run_id, url)
         .await
 }
 
@@ -124,7 +125,10 @@ pub async fn get_project_logs(
     project_id: String,
     run_id: String,
 ) -> Result<Vec<ProjectLogEntry>, String> {
-    state.controller.get_project_logs(&project_id, &run_id).await
+    state
+        .controller
+        .get_project_logs(&project_id, &run_id)
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]

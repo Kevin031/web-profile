@@ -110,6 +110,7 @@ export const App = (): ReactElement => {
   const [isSelectingProjectRoot, setIsSelectingProjectRoot] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const promptedForProjectRootRef = useRef(false);
@@ -150,6 +151,7 @@ export const App = (): ReactElement => {
     }
 
     let disposed = false;
+    setIsCheckingUpdate(true);
     void check()
       .then((update) => {
         if (disposed) {
@@ -160,6 +162,11 @@ export const App = (): ReactElement => {
       })
       .catch((error: unknown) => {
         console.error('[updater:check]', error);
+      })
+      .finally(() => {
+        if (!disposed) {
+          setIsCheckingUpdate(false);
+        }
       });
 
     return () => {
@@ -385,17 +392,18 @@ export const App = (): ReactElement => {
     }
   };
 
-  const openProjectUrl = async (project: ProjectInfo, runId?: string): Promise<void> => {
+  const openProjectUrl = async (project: ProjectInfo, runId?: string, url?: string): Promise<void> => {
     try {
       const targetRunId =
         runId ??
+        (url ? findRunIdForUrl(processStates, project.id, url) : undefined) ??
         getProjectRunAggregate(processStates, project.id).primaryRun?.runId ??
         findActiveRunByCommand(processStates, project.id, project.startCommand)?.runId;
       if (!targetRunId) {
         showToast('error', '尚未获取到项目访问地址');
         return;
       }
-      const result = await api.openProjectUrl(project.id, targetRunId);
+      const result = await api.openProjectUrl(project.id, targetRunId, url);
       showToast(result.ok ? 'success' : 'error', result.message);
     } catch (error) {
       showToast('error', errorMessage(error));
@@ -569,6 +577,27 @@ export const App = (): ReactElement => {
     }
   };
 
+  const checkForUpdates = async (): Promise<void> => {
+    if (isCheckingUpdate || isInstallingUpdate) {
+      return;
+    }
+
+    try {
+      setIsCheckingUpdate(true);
+      const update = await check();
+      setAvailableUpdate(update);
+      if (update) {
+        showToast('info', `发现新版本 v${update.version}`);
+      } else {
+        showToast('success', '当前已是最新版本');
+      }
+    } catch (error) {
+      showToast('error', `检查更新失败：${errorMessage(error)}`);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
   return (
     <main className={`app-shell ${isMacOS ? 'is-macos' : ''}`}>
       <WindowTitlebar isDesktop={!isWebPreview} isMacOS={isMacOS} />
@@ -632,18 +661,28 @@ export const App = (): ReactElement => {
             <p>{visibleProjects.length} / {projects.length} 个项目</p>
           </div>
           <div className="toolbar-actions">
-            {availableUpdate ? (
-              <button
-                className="update-button"
-                type="button"
-                disabled={isInstallingUpdate}
-                title={`下载并安装 Web Profile ${availableUpdate.version}`}
-                onClick={() => void installAvailableUpdate()}
-              >
-                {isInstallingUpdate ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
-                <span>{isInstallingUpdate ? `更新中 ${updateProgress ?? 0}%` : `更新至 v${availableUpdate.version}`}</span>
-              </button>
-            ) : null}
+            {!isWebPreview ? <button
+              className={availableUpdate ? 'update-button' : 'update-button check-only'}
+              type="button"
+              disabled={isCheckingUpdate || isInstallingUpdate}
+              title={availableUpdate ? `下载并安装 Web Profile ${availableUpdate.version}` : '检查 Web Profile 更新'}
+              onClick={() => void (availableUpdate ? installAvailableUpdate() : checkForUpdates())}
+            >
+              {isInstallingUpdate || isCheckingUpdate ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : availableUpdate ? (
+                <Download size={15} />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+              <span>{isInstallingUpdate
+                ? `更新中 ${updateProgress ?? 0}%`
+                : isCheckingUpdate
+                  ? '检查中'
+                  : availableUpdate
+                    ? `更新至 v${availableUpdate.version}`
+                    : '检查更新'}</span>
+            </button> : null}
             <div className="view-mode-switch" aria-label="项目展示方式" role="group">
               <button
                 className={config?.projectViewMode !== 'grid' ? 'active' : ''}
@@ -973,7 +1012,7 @@ interface ProjectTableProps {
   onSelect: (projectId: string) => void;
   onOpenProject: (project: ProjectInfo) => Promise<void>;
   onOpenToolChange: (tool: ProjectOpenTool) => Promise<void>;
-  onOpenUrl: (project: ProjectInfo, runId?: string) => Promise<void>;
+  onOpenUrl: (project: ProjectInfo, runId?: string, url?: string) => Promise<void>;
   onStart: (project: ProjectInfo) => Promise<void>;
   onStop: (project: ProjectInfo) => Promise<void>;
   onToggleFavorite: (project: ProjectInfo, favorite: boolean) => Promise<void>;
@@ -1076,20 +1115,30 @@ const ProjectTable = ({
                 <td>
                   <RunBadge aggregate={aggregate} />
                 </td>
-                <td className="url-cell" title={aggregate.url ?? ''}>
-                  {aggregate.url ? (
-                    <button
-                      className="url-open-button"
-                      type="button"
-                      title="用浏览器打开"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void onOpenUrl(project, aggregate.primaryRun?.runId);
-                      }}
-                    >
-                      <span>{aggregate.url}</span>
-                      <ExternalLink size={13} />
-                    </button>
+                <td className="url-cell" title={aggregate.urls.join('\n')}>
+                  {aggregate.urls.length > 0 ? (
+                    <div className="url-list">
+                      {aggregate.urls.map((url) => (
+                        <button
+                          key={url}
+                          className="url-open-button"
+                          type="button"
+                          title="用浏览器打开"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void onOpenUrl(
+                              project,
+                              findRunIdForUrl(processStates, project.id, url) ??
+                                aggregate.primaryRun?.runId,
+                              url
+                            );
+                          }}
+                        >
+                          <span>{url}</span>
+                          <ExternalLink size={13} />
+                        </button>
+                      ))}
+                    </div>
                   ) : (
                     '-'
                   )}
@@ -1238,18 +1287,28 @@ const ProjectGrid = ({
 
               <div className="project-card-url">
                 <span>URL</span>
-                {aggregate.url ? (
-                  <button
-                    type="button"
-                    title="用浏览器打开"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void onOpenUrl(project, aggregate.primaryRun?.runId);
-                    }}
-                  >
-                    <span>{aggregate.url}</span>
-                    <ExternalLink size={13} />
-                  </button>
+                {aggregate.urls.length > 0 ? (
+                  <div className="url-list">
+                    {aggregate.urls.map((url) => (
+                      <button
+                        key={url}
+                        type="button"
+                        title="用浏览器打开"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void onOpenUrl(
+                            project,
+                            findRunIdForUrl(processStates, project.id, url) ??
+                              aggregate.primaryRun?.runId,
+                            url
+                          );
+                        }}
+                      >
+                        <span>{url}</span>
+                        <ExternalLink size={13} />
+                      </button>
+                    ))}
+                  </div>
                 ) : (
                   <strong>-</strong>
                 )}
@@ -1304,7 +1363,7 @@ interface ProjectDetailsProps {
   onHide: (project: ProjectInfo, hidden: boolean) => Promise<void>;
   onOpenProject: (project: ProjectInfo) => Promise<void>;
   onOpenToolChange: (tool: ProjectOpenTool) => Promise<void>;
-  onOpenUrl: (project: ProjectInfo, runId?: string) => Promise<void>;
+  onOpenUrl: (project: ProjectInfo, runId?: string, url?: string) => Promise<void>;
   onRunScript: (project: ProjectInfo, scriptName: string) => Promise<void>;
   onSaveCommand: (project: ProjectInfo, startCommand: string) => Promise<void>;
   onStopRun: (project: ProjectInfo, runId: string) => Promise<void>;
@@ -1336,7 +1395,8 @@ const ProjectDetails = ({
   const [selectedRunId, setSelectedRunId] = useState('');
   const activeTab = runTabs.find((tab) => tab.runId === selectedRunId) ?? runTabs[0];
   const activeLogs = activeTab ? logs[activeTab.runId] ?? [] : [];
-  const projectUrl = activeTab?.url ?? aggregate.url;
+  const projectUrls =
+    activeTab && activeTab.urls.length > 0 ? activeTab.urls : aggregate.urls;
 
   useEffect(() => {
     setCommand(project.startCommand);
@@ -1401,7 +1461,7 @@ const ProjectDetails = ({
               </div>
               <div>
                 <span>端口</span>
-                <strong>{getUrlPort(projectUrl)}</strong>
+                <strong>{formatUrlPorts(projectUrls)}</strong>
               </div>
               <div>
                 <span>包管理</span>
@@ -1423,16 +1483,29 @@ const ProjectDetails = ({
 
             <section className="visit-section">
               <h3>访问</h3>
-              {projectUrl ? (
-                <button
-                  className="visit-button"
-                  type="button"
-                  title="用浏览器打开"
-                  onClick={() => void onOpenUrl(project, activeTab?.runId)}
-                >
-                  <span>{projectUrl}</span>
-                  <ExternalLink size={15} />
-                </button>
+              {projectUrls.length > 0 ? (
+                <div className="visit-list">
+                  {projectUrls.map((url) => (
+                    <button
+                      key={url}
+                      className="visit-button"
+                      type="button"
+                      title="用浏览器打开"
+                      onClick={() =>
+                        void onOpenUrl(
+                          project,
+                          findRunIdForUrl(processStates, project.id, url) ??
+                            activeTab?.runId ??
+                            aggregate.primaryRun?.runId,
+                          url
+                        )
+                      }
+                    >
+                      <span>{url}</span>
+                      <ExternalLink size={15} />
+                    </button>
+                  ))}
+                </div>
               ) : (
                 <div className="visit-empty">等待启动日志输出 Local 地址</div>
               )}
@@ -1558,7 +1631,7 @@ const isLiveRunState = (state: ProjectProcessState['state']): boolean =>
   state === 'starting' || state === 'running';
 
 const isProjectStartSettled = (state: ProjectProcessState): boolean =>
-  Boolean(state.url) || ['failed', 'exited', 'idle', 'stopping'].includes(state.state);
+  Boolean(state.urls?.length) || ['failed', 'exited', 'idle', 'stopping'].includes(state.state);
 
 const withProjectId = (projectIds: Set<string>, projectId: string): Set<string> => {
   const next = new Set(projectIds);
@@ -1586,15 +1659,41 @@ interface ProjectRunAggregate {
   badgeState: ProjectProcessState['state'];
   liveCount: number;
   primaryRun?: ProjectProcessState;
-  url?: string;
+  urls: string[];
 }
 
 interface ProjectRunTab {
   runId: string;
   command: string;
   state: ProjectProcessState['state'];
-  url?: string;
+  urls: string[];
 }
+
+const getProcessUrls = (state: ProjectProcessState | undefined): string[] => state?.urls ?? [];
+
+const getEndpointKey = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    return `${parsed.protocol}//${parsed.hostname}:${port}`;
+  } catch {
+    return url.replace(/\/$/, '');
+  }
+};
+
+const uniqueUrlsByEndpoint = (urls: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const url of urls) {
+    const key = getEndpointKey(url);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(url);
+  }
+  return result;
+};
 
 const getProjectRuns = (
   processStates: Record<string, ProjectProcessState>,
@@ -1611,6 +1710,14 @@ const findActiveRunByCommand = (
     (state) => state.command === command && isLiveRunState(state.state)
   );
 
+const findRunIdForUrl = (
+  processStates: Record<string, ProjectProcessState>,
+  projectId: string,
+  url: string
+): string | undefined =>
+  getProjectRuns(processStates, projectId).find((state) => getProcessUrls(state).includes(url))
+    ?.runId;
+
 const getProjectRunAggregate = (
   processStates: Record<string, ProjectProcessState>,
   projectId: string
@@ -1619,10 +1726,10 @@ const getProjectRunAggregate = (
   const liveRuns = runs.filter((state) => isLiveRunState(state.state));
   const stoppingRuns = runs.filter((state) => state.state === 'stopping');
   const primaryRun =
-    liveRuns.find((state) => state.url) ??
+    liveRuns.find((state) => getProcessUrls(state).length > 0) ??
     liveRuns[0] ??
     stoppingRuns[0] ??
-    runs.find((state) => state.url) ??
+    runs.find((state) => getProcessUrls(state).length > 0) ??
     runs[runs.length - 1];
 
   let badgeState: ProjectProcessState['state'] = 'idle';
@@ -1638,11 +1745,13 @@ const getProjectRunAggregate = (
     badgeState = 'exited';
   }
 
+  const urlSource = liveRuns.length > 0 ? liveRuns : primaryRun ? [primaryRun] : [];
+
   return {
     badgeState,
     liveCount: liveRuns.length,
     primaryRun,
-    url: primaryRun?.url
+    urls: uniqueUrlsByEndpoint(urlSource.flatMap((state) => getProcessUrls(state)))
   };
 };
 
@@ -1691,7 +1800,7 @@ const collectProjectRunTabs = (
         runId,
         command,
         state: state?.state ?? 'exited',
-        url: state?.url
+        urls: getProcessUrls(state)
       };
     })
     .sort((left, right) => {
@@ -1773,7 +1882,7 @@ function getProjectSearchFields(
     { value: project.startCommand, weight: 7 },
     { value: project.packageInfo?.packageManager ?? '', weight: 8 },
     { value: formatAggregateStatus(aggregate), weight: 9 },
-    { value: aggregate.url ?? '', weight: 10 },
+    { value: aggregate.urls.join(' '), weight: 10 },
     ...scripts.map((script) => ({ value: script, weight: 11 }))
   ].map((field) => ({ ...field, value: field.value.toLowerCase() }));
 }
@@ -1802,4 +1911,9 @@ const getUrlPort = (url: string | undefined): string => {
   } catch {
     return '-';
   }
+};
+
+const formatUrlPorts = (urls: string[]): string => {
+  const ports = urls.map((url) => getUrlPort(url)).filter((port) => port !== '-');
+  return ports.length > 0 ? ports.join(' · ') : '-';
 };

@@ -179,21 +179,36 @@ impl DashboardController {
         &self,
         project_id: &str,
         run_id: &str,
+        url: Option<String>,
     ) -> Result<TaskResult, String> {
         self.require_project(project_id).await?;
         let state = self.process_manager.get_state(run_id).await;
         if state.project_id != project_id {
             return Err(format!("运行实例与项目不匹配：{run_id}"));
         }
-        let Some(url) = state.url else {
+        if state.urls.is_empty() {
             return Ok(TaskResult {
                 ok: false,
                 message: "尚未获取到项目访问地址".to_string(),
                 stderr: None,
                 exit_code: None,
             });
+        }
+        let target = match url {
+            Some(requested) => {
+                if !state.urls.iter().any(|known| known == &requested) {
+                    return Ok(TaskResult {
+                        ok: false,
+                        message: format!("地址不在已识别列表中：{requested}"),
+                        stderr: None,
+                        exit_code: None,
+                    });
+                }
+                requested
+            }
+            None => state.urls[0].clone(),
         };
-        Ok(open_http_url(&self.app, &url))
+        Ok(open_http_url(&self.app, &target))
     }
 
     pub async fn get_project_logs(
@@ -203,10 +218,7 @@ impl DashboardController {
     ) -> Result<Vec<ProjectLogEntry>, String> {
         self.require_project(project_id).await?;
         let logs = self.process_manager.get_logs(run_id).await;
-        if logs
-            .iter()
-            .any(|entry| entry.project_id != project_id)
-        {
+        if logs.iter().any(|entry| entry.project_id != project_id) {
             return Err(format!("运行实例与项目不匹配：{run_id}"));
         }
         let state = self.process_manager.get_state(run_id).await;

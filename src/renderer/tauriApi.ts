@@ -54,7 +54,12 @@ export const createTauriApi = (dependencyOverrides: Partial<TauriApiDependencies
     stopAllProjects: () => dependencies.invoke('stop_all_projects'),
     restartProject: (projectId, runId) => dependencies.invoke('restart_project', { projectId, runId }),
     openProject: (projectId, tool: ProjectOpenTool) => dependencies.invoke('open_project', { projectId, tool }),
-    openProjectUrl: (projectId, runId) => dependencies.invoke('open_project_url', { projectId, runId }),
+    openProjectUrl: (projectId, runId, url) =>
+      dependencies.invoke('open_project_url', {
+        projectId,
+        runId,
+        ...(url !== undefined ? { url } : {})
+      }),
     getProjectLogs: (projectId, runId) => dependencies.invoke('get_project_logs', { projectId, runId }),
     updateProjectConfig: (projectId, patch: ProjectConfigPatch) =>
       dependencies.invoke('update_project_config', { projectId, patch }),
