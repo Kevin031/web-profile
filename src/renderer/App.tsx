@@ -1052,25 +1052,29 @@ const SettingsMenu = ({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="settings-menu" align="end" sideOffset={6}>
-          <DropdownMenu.Item className="settings-menu-item" onSelect={onChangeRoot}>
+          <DropdownMenu.Item className="settings-menu-item settings-menu-item-with-icon" onSelect={onChangeRoot}>
             <FolderOpen size={15} />
             <span>{t('toolbar.changeRoot')}</span>
           </DropdownMenu.Item>
           <DropdownMenu.Separator className="settings-menu-separator" />
           <DropdownMenu.Label className="settings-menu-label">{t('language.switch')}</DropdownMenu.Label>
           <DropdownMenu.Item
-            className="settings-menu-item"
+            className="settings-menu-item settings-menu-item-option"
             onSelect={() => onLanguageChange('en')}
           >
-            <span>{t('language.en')}</span>
-            {language === 'en' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            <span className="settings-menu-option-label">{t('language.en')}</span>
+            <span className="settings-menu-option-check">
+              {language === 'en' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            </span>
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            className="settings-menu-item"
+            className="settings-menu-item settings-menu-item-option"
             onSelect={() => onLanguageChange('zh')}
           >
-            <span>{t('language.zh')}</span>
-            {language === 'zh' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            <span className="settings-menu-option-label">{t('language.zh')}</span>
+            <span className="settings-menu-option-check">
+              {language === 'zh' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            </span>
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

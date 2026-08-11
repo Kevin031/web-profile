@@ -944,12 +944,6 @@ select {
 }
 
 .settings-menu-item {
-  display: grid;
-  height: 34px;
-  grid-template-columns: 18px minmax(0, 1fr) 14px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px;
   border-radius: var(--radius-sm);
   color: var(--ink-soft);
   cursor: pointer;
@@ -961,6 +955,46 @@ select {
 .settings-menu-item[data-highlighted] {
   background: var(--surface-soft);
   color: var(--ink);
+}
+
+.settings-menu-item-with-icon {
+  display: grid;
+  height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.settings-menu-item-with-icon > svg {
+  flex-shrink: 0;
+}
+
+.settings-menu-item-option {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px;
+}
+
+.settings-menu-option-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.settings-menu-option-check {
+  display: flex;
+  width: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-menu-option-check > svg {
+  color: var(--primary);
 }
 
 @keyframes project-open-menu-in {
