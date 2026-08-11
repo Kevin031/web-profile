@@ -1,0 +1,145 @@
+const zh = {
+  'status.idle': '未启动',
+  'status.starting': '启动中',
+  'status.running': '运行中',
+  'status.stopping': '停止中',
+  'status.exited': '已退出',
+  'status.failed': '失败',
+  'status.runningCount': '运行中 ×{count}',
+  'status.startingCount': '启动中 ×{count}',
+
+  'openTool.explorer': '资源管理器',
+  'openTool.vscode': 'VSCode',
+  'openTool.cursor': 'Cursor',
+  'openTool.terminal': 'Terminal',
+  'openTool.iterm': 'iTerm',
+
+  'filter.all': '全部',
+  'filter.favorite': '收藏',
+  'filter.running': '运行中',
+  'filter.dirty': '有改动',
+  'filter.hidden': '隐藏',
+
+  'git.notGit': '非 Git',
+  'git.clean': '干净',
+  'git.dirty': '有改动',
+  'git.notRefreshed': '未刷新',
+  'git.sync': ' +{ahead}/-{behind}',
+
+  'toast.projectsRefreshed': '项目列表已刷新',
+  'toast.urlNotReady': '尚未获取到项目访问地址',
+  'toast.pathCopied': '项目路径已复制',
+  'toast.commandSaved': '启动命令已保存',
+  'toast.rootUpdated': '项目根目录已更新',
+  'toast.updateFailed': '更新失败：{message}',
+  'toast.updateFound': '发现新版本 v{version}',
+  'toast.upToDate': '当前已是最新版本',
+  'toast.checkUpdateFailed': '检查更新失败：{message}',
+
+  'search.placeholder': '快速搜索项目',
+  'search.clear': '清空搜索',
+
+  'sidebar.projectRoot': '项目根目录',
+  'sidebar.changeRoot': '更换根目录',
+
+  'toolbar.title': '项目工作台',
+  'toolbar.projectCount': '{visible} / {total} 个项目',
+  'toolbar.checkUpdate': '检查更新',
+  'toolbar.checking': '检查中',
+  'toolbar.updating': '更新中 {progress}%',
+  'toolbar.updateTo': '更新至 v{version}',
+  'toolbar.installUpdateTitle': '下载并安装 Web Profile {version}',
+  'toolbar.checkUpdateTitle': '检查 Web Profile 更新',
+  'toolbar.tableView': '表格视图',
+  'toolbar.gridView': '网格视图',
+  'toolbar.viewMode': '项目展示方式',
+  'toolbar.stopAll': '全部停止',
+  'toolbar.stopAllTitle': '停止所有运行中的项目',
+  'toolbar.refreshProjects': '刷新项目',
+  'toolbar.changeRoot': '更换项目根目录',
+
+  'preview.mockData': 'Mock 数据',
+
+  'empty.noProjects': '暂无项目',
+  'empty.noMatch': '没有匹配项目',
+
+  'rootGate.title': '需要配置项目根目录',
+  'rootGate.description': '未找到默认目录 {path}，选择一个可用目录后才能继续。',
+  'rootGate.select': '选择项目根目录',
+
+  'titlebar.caption': '前端项目启动器',
+  'titlebar.minimize': '最小化',
+  'titlebar.maximize': '最大化',
+  'titlebar.restore': '还原',
+  'titlebar.close': '关闭',
+
+  'openProject.withTool': '使用{tool}打开项目',
+  'openProject.selectTool': '选择打开工具',
+  'openProject.currentSelection': '当前选择',
+
+  'moreActions.title': '更多操作',
+  'moreActions.restart': '重启项目',
+  'moreActions.refreshGit': '刷新 Git 状态',
+  'moreActions.pull': 'Pull',
+
+  'table.project': '项目',
+  'table.branch': '分支',
+  'table.git': 'Git',
+  'table.command': '启动命令',
+  'table.status': '状态',
+  'table.url': 'URL',
+  'table.actions': '操作',
+
+  'action.favorite': '收藏',
+  'action.unfavorite': '取消收藏',
+  'action.openInBrowser': '用浏览器打开',
+  'action.startingClickStop': '项目启动中，点击停止全部服务',
+  'action.stopAll': '停止全部服务',
+  'action.start': '启动',
+  'action.loading': '加载中',
+
+  'details.copyPath': '复制项目路径',
+  'details.hideProject': '隐藏项目',
+  'details.status': '状态',
+  'details.branch': '分支',
+  'details.run': '运行',
+  'details.port': '端口',
+  'details.packageManager': '包管理',
+  'details.start': '启动',
+  'details.save': '保存',
+  'details.visit': '访问',
+  'details.visitEmpty': '等待启动日志输出 Local 地址',
+  'details.branches': '分支',
+  'details.noBranches': '无分支',
+  'details.scripts': 'Scripts',
+  'details.scriptRunning': '{name} 运行中',
+  'details.runScript': '执行 {name}',
+  'details.scriptRunningSuffix': ' · 运行中',
+  'details.logs': '日志',
+  'details.logTabs': '服务日志',
+  'details.stopService': '停止该服务',
+  'details.stop': '停止',
+  'details.noLogs': '暂无日志',
+
+  'language.zh': '中文',
+  'language.en': 'English',
+  'language.switch': '语言',
+
+  'settings.title': '设置',
+
+  'dialog.selectRootContinue': '选择项目根目录以继续',
+  'dialog.changeRoot': '更换项目根目录',
+
+  'error.operationFailed': '操作失败',
+  'error.copyPathFailed': '复制项目路径失败',
+
+  'closeGuard.message': '当前仍有项目在运行。停止全部项目并退出？',
+  'closeGuard.title': '退出 Web Profile',
+  'closeGuard.ok': '停止并退出',
+  'closeGuard.cancel': '取消',
+  'closeGuard.failed': '退出应用失败'
+} as const;
+
+export type TranslationKey = keyof typeof zh;
+
+export const zhMessages: Record<TranslationKey, string> = zh;

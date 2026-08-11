@@ -24,6 +24,7 @@ const mockConfig: AppConfig = {
   commandOverrides: {},
   projectOpenTool: 'explorer',
   projectViewMode: 'table',
+  language: 'en',
   logLineLimit: 500,
   scanOnStartup: true
 };

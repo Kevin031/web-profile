@@ -6,6 +6,8 @@ export type ProjectOpenTool = 'explorer' | 'vscode' | 'cursor' | 'terminal' | 'i
 
 export type ProjectViewMode = 'table' | 'grid';
 
+export type AppLanguage = 'zh' | 'en';
+
 export interface AppConfig {
   projectRoot: string;
   manualProjectPaths: string[];
@@ -14,6 +16,7 @@ export interface AppConfig {
   commandOverrides: Record<string, string>;
   projectOpenTool: ProjectOpenTool;
   projectViewMode: ProjectViewMode;
+  language: AppLanguage;
   logLineLimit: number;
   scanOnStartup: boolean;
 }

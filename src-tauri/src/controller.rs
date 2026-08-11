@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::{
+    i18n,
     models::{
         AppConfig, AppConfigUpdate, BranchInfo, DashboardState, GitStatus, ProjectConfigPatch,
         ProjectInfo, ProjectListUpdate, ProjectLogEntry, ProjectOpenTool, ProjectProcessState,
@@ -118,7 +119,8 @@ impl DashboardController {
 
     pub async fn pull_project(&self, project_id: &str) -> Result<TaskResult, String> {
         let project = self.require_project(project_id).await?;
-        Ok(self.git_service.pull(&project.path).await)
+        let config = self.load_config().await?;
+        Ok(self.git_service.pull(&project.path, config.language).await)
     }
 
     pub async fn checkout_branch(
@@ -127,7 +129,11 @@ impl DashboardController {
         branch_name: &str,
     ) -> Result<TaskResult, String> {
         let project = self.require_project(project_id).await?;
-        Ok(self.git_service.checkout(&project.path, branch_name).await)
+        let config = self.load_config().await?;
+        Ok(self
+            .git_service
+            .checkout(&project.path, branch_name, config.language)
+            .await)
     }
 
     pub async fn start_project(
@@ -136,7 +142,11 @@ impl DashboardController {
         command: Option<&str>,
     ) -> Result<ProjectProcessState, String> {
         let project = self.require_project(project_id).await?;
-        Ok(self.process_manager.start(&project, command).await)
+        let config = self.load_config().await?;
+        Ok(self
+            .process_manager
+            .start(&project, command, config.language)
+            .await)
     }
 
     pub async fn stop_project(
@@ -145,16 +155,24 @@ impl DashboardController {
         run_id: &str,
     ) -> Result<ProjectProcessState, String> {
         self.require_project(project_id).await?;
-        self.process_manager.stop(project_id, run_id).await
+        let config = self.load_config().await?;
+        self.process_manager
+            .stop(project_id, run_id, config.language)
+            .await
     }
 
     pub async fn stop_project_runs(&self, project_id: &str) -> Result<TaskResult, String> {
         self.require_project(project_id).await?;
-        Ok(self.process_manager.stop_project_runs(project_id).await)
+        let config = self.load_config().await?;
+        Ok(self
+            .process_manager
+            .stop_project_runs(project_id, config.language)
+            .await)
     }
 
     pub async fn stop_all_projects(&self) -> TaskResult {
-        self.process_manager.stop_all().await
+        let config = self.load_config().await.unwrap_or_default();
+        self.process_manager.stop_all(config.language).await
     }
 
     pub async fn restart_project(
@@ -163,7 +181,10 @@ impl DashboardController {
         run_id: &str,
     ) -> Result<ProjectProcessState, String> {
         let project = self.require_project(project_id).await?;
-        self.process_manager.restart(&project, run_id).await
+        let config = self.load_config().await?;
+        self.process_manager
+            .restart(&project, run_id, config.language)
+            .await
     }
 
     pub async fn open_project(
@@ -172,7 +193,13 @@ impl DashboardController {
         tool: ProjectOpenTool,
     ) -> Result<TaskResult, String> {
         let project = self.require_project(project_id).await?;
-        Ok(open_project(&self.app, &project.path, tool))
+        let config = self.load_config().await?;
+        Ok(open_project(
+            &self.app,
+            &project.path,
+            tool,
+            config.language,
+        ))
     }
 
     pub async fn open_project_url(
@@ -182,6 +209,8 @@ impl DashboardController {
         url: Option<String>,
     ) -> Result<TaskResult, String> {
         self.require_project(project_id).await?;
+        let config = self.load_config().await?;
+        let language = config.language;
         let state = self.process_manager.get_state(run_id).await;
         if state.project_id != project_id {
             return Err(format!("运行实例与项目不匹配：{run_id}"));
@@ -189,7 +218,7 @@ impl DashboardController {
         if state.urls.is_empty() {
             return Ok(TaskResult {
                 ok: false,
-                message: "尚未获取到项目访问地址".to_string(),
+                message: i18n::url_not_ready(language),
                 stderr: None,
                 exit_code: None,
             });
@@ -199,7 +228,7 @@ impl DashboardController {
                 if !state.urls.iter().any(|known| known == &requested) {
                     return Ok(TaskResult {
                         ok: false,
-                        message: format!("地址不在已识别列表中：{requested}"),
+                        message: i18n::url_not_in_list(language, &requested),
                         stderr: None,
                         exit_code: None,
                     });
@@ -208,7 +237,7 @@ impl DashboardController {
             }
             None => state.urls[0].clone(),
         };
-        Ok(open_http_url(&self.app, &target))
+        Ok(open_http_url(&self.app, &target, language))
     }
 
     pub async fn get_project_logs(

@@ -3,7 +3,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 use crate::{
-    models::{BranchInfo, GitStatus, TaskResult},
+    i18n,
+    models::{AppLanguage, BranchInfo, GitStatus, TaskResult},
     utils::command::{run_command, CommandResult},
 };
 
@@ -114,7 +115,7 @@ impl GitService {
             .collect()
     }
 
-    pub async fn pull(&self, project_path: &str) -> TaskResult {
+    pub async fn pull(&self, project_path: &str, language: AppLanguage) -> TaskResult {
         let result = self
             .run(
                 &["pull", "--ff-only"],
@@ -125,16 +126,21 @@ impl GitService {
         TaskResult {
             ok: result.exit_code == 0,
             message: if result.exit_code == 0 {
-                non_empty(result.stdout.trim()).unwrap_or_else(|| "拉取完成".to_string())
+                non_empty(result.stdout.trim()).unwrap_or_else(|| i18n::pull_complete(language))
             } else {
-                "拉取失败".to_string()
+                i18n::pull_failed(language)
             },
             stderr: non_empty(result.stderr.trim()),
             exit_code: Some(result.exit_code),
         }
     }
 
-    pub async fn checkout(&self, project_path: &str, branch_name: &str) -> TaskResult {
+    pub async fn checkout(
+        &self,
+        project_path: &str,
+        branch_name: &str,
+        language: AppLanguage,
+    ) -> TaskResult {
         let status = self
             .run(
                 &["status", "--porcelain"],
@@ -145,7 +151,7 @@ impl GitService {
         if status.exit_code == 0 && !status.stdout.trim().is_empty() {
             return TaskResult {
                 ok: false,
-                message: "当前有未提交改动，已阻止切分支".to_string(),
+                message: i18n::checkout_blocked_dirty(language),
                 stderr: non_empty(status.stdout.trim()),
                 exit_code: Some(status.exit_code),
             };
@@ -161,9 +167,9 @@ impl GitService {
         TaskResult {
             ok: result.exit_code == 0,
             message: if result.exit_code == 0 {
-                format!("已切换到 {branch_name}")
+                i18n::checked_out_branch(language, branch_name)
             } else {
-                "切分支失败".to_string()
+                i18n::checkout_failed(language)
             },
             stderr: non_empty(result.stderr.trim()),
             exit_code: Some(result.exit_code),
