@@ -1625,7 +1625,29 @@ const gitLabel = (status: GitStatus): string => {
   return `${status.workingTree === 'clean' ? '干净' : '有改动'}${sync}`;
 };
 
-const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : '操作失败');
+const errorMessage = (error: unknown): string => {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+  if (error && typeof error === 'object') {
+    const record = error as { message?: unknown; error?: unknown };
+    if (typeof record.message === 'string' && record.message.trim()) {
+      return record.message;
+    }
+    if (typeof record.error === 'string' && record.error.trim()) {
+      return record.error;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // fall through
+    }
+  }
+  return '操作失败';
+};
 
 const isLiveRunState = (state: ProjectProcessState['state']): boolean =>
   state === 'starting' || state === 'running';

@@ -87,6 +87,14 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
 
+      - name: 清理旧安装包产物
+        shell: bash
+        run: |
+          rm -rf src-tauri/target/release/bundle/nsis
+          rm -rf src-tauri/target/release/bundle/msi
+          rm -rf src-tauri/target/release/bundle/macos
+          rm -rf src-tauri/target/release/bundle/dmg
+
       - name: 构建 ${{ matrix.bundle }} 安装包
         env:
           APP_VERSION: ${{ needs.prepare.outputs.version }}

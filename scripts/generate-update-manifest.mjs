@@ -16,6 +16,31 @@ const walk = async (directory) => {
   return nested.flat();
 };
 
+/**
+ * GitHub Release 上传时会把文件名中的空格替换成点号，下载 URL 必须使用替换后的名字。
+ * @param {string} fileName 本地产物文件名
+ * @returns {string} Release 资源名
+ */
+const toGitHubReleaseAssetName = (fileName) => fileName.replaceAll(' ', '.');
+
+/**
+ * 在多个签名产物中优先选择匹配当前版本号的文件。
+ * @param {string[]} candidates 候选签名文件路径
+ * @param {string} suffix 目标后缀，例如 `.exe.sig`
+ * @param {string} releaseVersion 发布版本号
+ * @returns {string | undefined}
+ */
+const pickSignaturePath = (candidates, suffix, releaseVersion) => {
+  const matched = candidates.filter((path) => path.endsWith(suffix));
+  if (matched.length === 0) {
+    return undefined;
+  }
+
+  const versionMatched = matched.filter((path) => basename(path).includes(releaseVersion));
+  const preferred = versionMatched.length > 0 ? versionMatched : matched;
+  return preferred.toSorted((left, right) => basename(left).localeCompare(basename(right))).at(-1);
+};
+
 const files = await walk(assetsRoot);
 const platformFiles = files.filter((path) => basename(path) === 'update-platform.txt');
 const platforms = {};
@@ -24,17 +49,20 @@ for (const platformFile of platformFiles) {
   const platform = (await readFile(platformFile, 'utf8')).trim();
   const artifactDirectory = dirname(platformFile);
   const candidates = files.filter((path) => path.startsWith(`${artifactDirectory}/`) && path.endsWith('.sig'));
-  const signaturePath = candidates.find((path) =>
-    platform.startsWith('windows-') ? path.endsWith('.exe.sig') : path.endsWith('.app.tar.gz.sig')
+  const signaturePath = pickSignaturePath(
+    candidates,
+    platform.startsWith('windows-') ? '.exe.sig' : '.app.tar.gz.sig',
+    version
   );
   if (!signaturePath) {
     throw new Error(`${platform} 缺少 updater 签名产物`);
   }
 
   const bundleName = basename(signaturePath, '.sig');
+  const releaseAssetName = toGitHubReleaseAssetName(bundleName);
   platforms[platform] = {
     signature: (await readFile(signaturePath, 'utf8')).trim(),
-    url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(bundleName)}`
+    url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(releaseAssetName)}`
   };
 }
 
