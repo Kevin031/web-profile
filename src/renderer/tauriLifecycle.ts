@@ -1,9 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { AppApi } from '../shared/types';
+import type { AppApi, AppLanguage } from '../shared/types';
+import { createTranslator } from './i18n';
 
-export const installTauriCloseGuard = async (api: AppApi): Promise<() => void> => {
+export const installTauriCloseGuard = async (
+  api: AppApi,
+  language: AppLanguage
+): Promise<() => void> => {
+  const t = createTranslator(language);
   const appWindow = getCurrentWindow();
   let isClosing = false;
 
@@ -16,11 +21,11 @@ export const installTauriCloseGuard = async (api: AppApi): Promise<() => void> =
     try {
       const hasRunningProjects = await invoke<boolean>('has_running_projects');
       if (hasRunningProjects) {
-        const shouldStop = await confirm('当前仍有项目在运行。停止全部项目并退出？', {
-          title: '退出 Web Profile',
+        const shouldStop = await confirm(t('closeGuard.message'), {
+          title: t('closeGuard.title'),
           kind: 'warning',
-          okLabel: '停止并退出',
-          cancelLabel: '取消'
+          okLabel: t('closeGuard.ok'),
+          cancelLabel: t('closeGuard.cancel')
         });
         if (!shouldStop) {
           return;
@@ -37,8 +42,7 @@ export const installTauriCloseGuard = async (api: AppApi): Promise<() => void> =
       await appWindow.destroy();
     } catch (error) {
       console.error('[tauri:close-guard]', error);
-      window.alert(error instanceof Error ? error.message : '退出应用失败');
+      window.alert(error instanceof Error ? error.message : t('closeGuard.failed'));
     }
   });
 };
-

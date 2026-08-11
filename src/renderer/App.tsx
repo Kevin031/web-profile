@@ -32,6 +32,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
   AppConfig,
+  AppLanguage,
   BranchInfo,
   DashboardState,
   GitStatus,
@@ -42,6 +43,16 @@ import type {
   ProjectViewMode
 } from '../shared/types';
 import { resolveAppApi } from './appApi';
+import { installTauriCloseGuard } from './tauriLifecycle';
+import {
+  detectAppLanguage,
+  extractCommandFromStartLog,
+  I18nProvider,
+  openToolLabelKey,
+  statusLabelKey,
+  useI18n,
+  type Translator
+} from './i18n';
 import appIcon from './assets/app-icon.svg';
 import cursorIcon from './assets/open-tools/cursor.ico';
 import explorerIcon from './assets/open-tools/explorer.svg';
@@ -56,22 +67,7 @@ interface ToastState {
   message: string;
 }
 
-const statusText: Record<ProjectProcessState['state'], string> = {
-  idle: '未启动',
-  starting: '启动中',
-  running: '运行中',
-  stopping: '停止中',
-  exited: '已退出',
-  failed: '失败'
-};
-
-const projectOpenToolLabels: Record<ProjectOpenTool, string> = {
-  explorer: '资源管理器',
-  vscode: 'VSCode',
-  cursor: 'Cursor',
-  terminal: 'Terminal',
-  iterm: 'iTerm'
-};
+const projectOpenTools: ProjectOpenTool[] = ['explorer', 'vscode', 'cursor', 'terminal', 'iterm'];
 
 const projectOpenToolIcons: Record<ProjectOpenTool, string> = {
   explorer: explorerIcon,
@@ -80,8 +76,6 @@ const projectOpenToolIcons: Record<ProjectOpenTool, string> = {
   terminal: terminalIcon,
   iterm: itermIcon
 };
-
-const projectOpenTools = Object.keys(projectOpenToolLabels) as ProjectOpenTool[];
 
 interface SearchField {
   value: string;
@@ -93,6 +87,31 @@ export const App = (): ReactElement => {
   const isWebPreview = !window.appApi;
   const isMacOS = useMemo(() => /Macintosh|Mac OS X/.test(window.navigator.userAgent), []);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const appLanguage = config?.language ?? detectAppLanguage();
+
+  return (
+    <I18nProvider language={appLanguage}>
+      <AppShell
+        api={api}
+        config={config}
+        isMacOS={isMacOS}
+        isWebPreview={isWebPreview}
+        setConfig={setConfig}
+      />
+    </I18nProvider>
+  );
+};
+
+interface AppShellProps {
+  api: ReturnType<typeof resolveAppApi>;
+  config: AppConfig | null;
+  isMacOS: boolean;
+  isWebPreview: boolean;
+  setConfig: (config: AppConfig | null) => void;
+}
+
+const AppShell = ({ api, config, isMacOS, isWebPreview, setConfig }: AppShellProps): ReactElement => {
+  const { t } = useI18n();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [gitStatuses, setGitStatuses] = useState<Record<string, GitStatus>>({});
   const [processStates, setProcessStates] = useState<Record<string, ProjectProcessState>>({});
@@ -114,6 +133,28 @@ export const App = (): ReactElement => {
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const promptedForProjectRootRef = useRef(false);
+
+  useEffect(() => {
+    if (isWebPreview || !config) {
+      return undefined;
+    }
+
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+
+    void installTauriCloseGuard(api, config.language).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      cleanup = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [api, config, isWebPreview]);
 
   useEffect(() => {
     const offProjectsUpdated = api.onProjectsUpdated((update) => {
@@ -195,7 +236,7 @@ export const App = (): ReactElement => {
       .map((project, index) => ({
         index,
         project,
-        rank: getProjectSearchRank(project, gitStatuses[project.id], getProjectRunAggregate(processStates, project.id), query)
+        rank: getProjectSearchRank(project, gitStatuses[project.id], getProjectRunAggregate(processStates, project.id), query, t)
       }))
       .filter((item) => item.rank >= 0);
 
@@ -219,26 +260,6 @@ export const App = (): ReactElement => {
     () => Object.values(processStates).filter((state) => isLiveRunState(state.state)).length,
     [processStates]
   );
-
-  useEffect(() => {
-    const handleGlobalSearchShortcut = (event: KeyboardEvent): void => {
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      const isTypingTarget = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      if (event.key === '/' && !isTypingTarget) {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleGlobalSearchShortcut);
-    return () => window.removeEventListener('keydown', handleGlobalSearchShortcut);
-  }, []);
 
   useEffect(() => {
     if (visibleProjects.length === 0) {
@@ -272,7 +293,7 @@ export const App = (): ReactElement => {
       setProcessStates(state.processStates);
       setSelectedProjectId(state.projects[0]?.id ?? '');
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     } finally {
       setLoading(false);
     }
@@ -299,9 +320,9 @@ export const App = (): ReactElement => {
       setLoading(true);
       const nextProjects = await api.scanProjects();
       setProjects(nextProjects);
-      showToast('success', '项目列表已刷新');
+      showToast('success', t('toast.projectsRefreshed'));
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     } finally {
       setLoading(false);
     }
@@ -352,6 +373,86 @@ export const App = (): ReactElement => {
     });
   };
 
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const isTypingTarget = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
+      const isOverlayTarget = Boolean(target?.closest('[role="menu"], [role="listbox"], [role="dialog"]'));
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (event.key === '/' && !isTypingTarget) {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (isTypingTarget || isOverlayTarget || event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+
+      if (
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
+        visibleProjects.length > 0
+      ) {
+        event.preventDefault();
+        const currentIndex = visibleProjects.findIndex((project) => project.id === selectedProjectId);
+        const safeIndex = currentIndex < 0 ? 0 : currentIndex;
+        const columnCount = config?.projectViewMode === 'grid' ? getProjectGridColumnCount() : 1;
+        const isVertical = event.key === 'ArrowUp' || event.key === 'ArrowDown';
+        const delta =
+          event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' ? -columnCount : columnCount;
+        const nextIndex = safeIndex + delta;
+        if (isVertical && (nextIndex < 0 || nextIndex >= visibleProjects.length)) {
+          return;
+        }
+        const clampedIndex = Math.max(0, Math.min(visibleProjects.length - 1, nextIndex));
+        const nextProjectId = visibleProjects[clampedIndex].id;
+        setSelectedProjectId(nextProjectId);
+        window.requestAnimationFrame(() => {
+          document
+            .querySelector(`[data-project-id="${CSS.escape(nextProjectId)}"]`)
+            ?.scrollIntoView({ block: 'nearest' });
+        });
+        return;
+      }
+
+      if (event.key !== 'Enter' || !selectedProject) {
+        return;
+      }
+
+      if (target?.closest('button, a, select, [role="menuitem"], [role="option"]')) {
+        return;
+      }
+
+      event.preventDefault();
+      const isStarting = startingProjectIds.has(selectedProject.id);
+      const isRunning = getProjectRunAggregate(processStates, selectedProject.id).liveCount > 0;
+      if (isStarting || isRunning) {
+        void stopProject(selectedProject);
+        return;
+      }
+      if (busyProjectId !== selectedProject.id) {
+        void startProject(selectedProject);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [
+    busyProjectId,
+    config?.projectViewMode,
+    processStates,
+    selectedProject,
+    selectedProjectId,
+    startingProjectIds,
+    visibleProjects
+  ]);
+
   const stopProjectRun = async (project: ProjectInfo, runId: string): Promise<void> => {
     await withBusy(project.id, async () => {
       const state = await api.stopProject(project.id, runId);
@@ -369,7 +470,7 @@ export const App = (): ReactElement => {
       const result = await api.stopAllProjects();
       showToast(result.ok ? 'success' : 'error', result.message);
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     } finally {
       setIsStoppingAll(false);
     }
@@ -400,13 +501,13 @@ export const App = (): ReactElement => {
         getProjectRunAggregate(processStates, project.id).primaryRun?.runId ??
         findActiveRunByCommand(processStates, project.id, project.startCommand)?.runId;
       if (!targetRunId) {
-        showToast('error', '尚未获取到项目访问地址');
+        showToast('error', t('toast.urlNotReady'));
         return;
       }
       const result = await api.openProjectUrl(project.id, targetRunId, url);
       showToast(result.ok ? 'success' : 'error', result.message);
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     }
   };
 
@@ -415,16 +516,16 @@ export const App = (): ReactElement => {
       const result = await api.openProject(project.id, config?.projectOpenTool ?? 'explorer');
       showToast(result.ok ? 'success' : 'error', result.message);
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     }
   };
 
   const copyProjectPath = async (project: ProjectInfo): Promise<void> => {
     try {
-      await copyText(project.path);
-      showToast('success', '项目路径已复制');
+      await copyText(project.path, t);
+      showToast('success', t('toast.pathCopied'));
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     }
   };
 
@@ -439,7 +540,7 @@ export const App = (): ReactElement => {
       setConfig(await api.updateAppConfig({ projectOpenTool }));
     } catch (error) {
       setConfig(previousConfig);
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     }
   };
 
@@ -454,7 +555,22 @@ export const App = (): ReactElement => {
       setConfig(await api.updateAppConfig({ projectViewMode }));
     } catch (error) {
       setConfig(previousConfig);
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
+    }
+  };
+
+  const updateLanguage = async (language: AppLanguage): Promise<void> => {
+    if (!config || config.language === language) {
+      return;
+    }
+
+    const previousConfig = config;
+    setConfig({ ...config, language });
+    try {
+      setConfig(await api.updateAppConfig({ language }));
+    } catch (error) {
+      setConfig(previousConfig);
+      showToast('error', errorMessage(error, t));
     }
   };
 
@@ -471,7 +587,7 @@ export const App = (): ReactElement => {
   const updateStartCommand = async (project: ProjectInfo, startCommand: string): Promise<void> => {
     const nextProjects = await api.updateProjectConfig(project.id, { startCommand });
     setProjects(nextProjects);
-    showToast('success', '启动命令已保存');
+    showToast('success', t('toast.commandSaved'));
   };
 
   const runProjectScript = async (project: ProjectInfo, scriptName: string): Promise<void> => {
@@ -498,7 +614,7 @@ export const App = (): ReactElement => {
     try {
       setIsSelectingProjectRoot(true);
       const selectedPath = await api.selectDirectory({
-        title: requiresProjectRoot ? '选择项目根目录以继续' : '更换项目根目录',
+        title: requiresProjectRoot ? t('dialog.selectRootContinue') : t('dialog.changeRoot'),
         defaultPath: requiresProjectRoot ? undefined : config.projectRoot
       });
       if (!selectedPath) {
@@ -512,9 +628,9 @@ export const App = (): ReactElement => {
       setConfig(nextConfig);
       setRequiresProjectRoot(false);
       await loadInitialState();
-      showToast('success', '项目根目录已更新');
+      showToast('success', t('toast.rootUpdated'));
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
     } finally {
       setIsSelectingProjectRoot(false);
     }
@@ -534,7 +650,7 @@ export const App = (): ReactElement => {
       await action();
       return true;
     } catch (error) {
-      showToast('error', errorMessage(error));
+      showToast('error', errorMessage(error, t));
       return false;
     } finally {
       setBusyProjectId('');
@@ -573,7 +689,7 @@ export const App = (): ReactElement => {
     } catch (error) {
       setIsInstallingUpdate(false);
       setUpdateProgress(null);
-      showToast('error', `更新失败：${errorMessage(error)}`);
+      showToast('error', t('toast.updateFailed', { message: errorMessage(error, t) }));
     }
   };
 
@@ -587,12 +703,12 @@ export const App = (): ReactElement => {
       const update = await check();
       setAvailableUpdate(update);
       if (update) {
-        showToast('info', `发现新版本 v${update.version}`);
+        showToast('info', t('toast.updateFound', { version: update.version }));
       } else {
-        showToast('success', '当前已是最新版本');
+        showToast('success', t('toast.upToDate'));
       }
     } catch (error) {
-      showToast('error', `检查更新失败：${errorMessage(error)}`);
+      showToast('error', t('toast.checkUpdateFailed', { message: errorMessage(error, t) }));
     } finally {
       setIsCheckingUpdate(false);
     }
@@ -607,7 +723,7 @@ export const App = (): ReactElement => {
           {isWebPreview ? (
             <div className="preview-note">
               <span>WEB</span>
-              <strong>Mock 数据</strong>
+              <strong>{t('preview.mockData')}</strong>
             </div>
           ) : null}
 
@@ -615,7 +731,7 @@ export const App = (): ReactElement => {
             <Search size={16} />
             <input
               ref={searchInputRef}
-              aria-label="快速搜索项目"
+              aria-label={t('search.placeholder')}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -624,32 +740,32 @@ export const App = (): ReactElement => {
                   event.currentTarget.blur();
                 }
               }}
-              placeholder="快速搜索项目"
+              placeholder={t('search.placeholder')}
             />
             {query ? (
-              <button className="search-clear" type="button" title="清空搜索" onClick={() => setQuery('')}>
+              <button className="search-clear" type="button" title={t('search.clear')} onClick={() => setQuery('')}>
                 <X size={14} />
               </button>
             ) : null}
           </label>
 
           <nav className="filter-list">
-            <FilterButton active={filter === 'all'} count={filterCounts.all} label="全部" onClick={() => setFilter('all')} />
-            <FilterButton active={filter === 'favorite'} count={filterCounts.favorite} label="收藏" onClick={() => setFilter('favorite')} />
-            <FilterButton active={filter === 'running'} count={filterCounts.running} label="运行中" onClick={() => setFilter('running')} />
-            <FilterButton active={filter === 'dirty'} count={filterCounts.dirty} label="有改动" onClick={() => setFilter('dirty')} />
-            <FilterButton active={filter === 'hidden'} count={filterCounts.hidden} label="隐藏" onClick={() => setFilter('hidden')} />
+            <FilterButton active={filter === 'all'} count={filterCounts.all} label={t('filter.all')} onClick={() => setFilter('all')} />
+            <FilterButton active={filter === 'favorite'} count={filterCounts.favorite} label={t('filter.favorite')} onClick={() => setFilter('favorite')} />
+            <FilterButton active={filter === 'running'} count={filterCounts.running} label={t('filter.running')} onClick={() => setFilter('running')} />
+            <FilterButton active={filter === 'dirty'} count={filterCounts.dirty} label={t('filter.dirty')} onClick={() => setFilter('dirty')} />
+            <FilterButton active={filter === 'hidden'} count={filterCounts.hidden} label={t('filter.hidden')} onClick={() => setFilter('hidden')} />
           </nav>
         </div>
 
         <div className="manual-form">
           <div className="manual-path-copy">
-            <span>项目根目录</span>
+            <span>{t('sidebar.projectRoot')}</span>
             <strong title={config?.projectRoot}>{config?.projectRoot ?? 'D:/Projects'}</strong>
           </div>
           <button type="button" disabled={isSelectingProjectRoot} onClick={() => void selectProjectRoot()}>
             {isSelectingProjectRoot ? <LoaderCircle className="spin" size={15} /> : <FolderOpen size={15} />}
-            <span>更换根目录</span>
+            <span>{t('sidebar.changeRoot')}</span>
           </button>
         </div>
       </aside>
@@ -657,15 +773,17 @@ export const App = (): ReactElement => {
       <section className="workspace">
         <header className="toolbar">
           <div>
-            <h1>项目工作台</h1>
-            <p>{visibleProjects.length} / {projects.length} 个项目</p>
+            <h1>{t('toolbar.title')}</h1>
+            <p>{t('toolbar.projectCount', { visible: visibleProjects.length, total: projects.length })}</p>
           </div>
           <div className="toolbar-actions">
             {!isWebPreview ? <button
               className={availableUpdate ? 'update-button' : 'update-button check-only'}
               type="button"
               disabled={isCheckingUpdate || isInstallingUpdate}
-              title={availableUpdate ? `下载并安装 Web Profile ${availableUpdate.version}` : '检查 Web Profile 更新'}
+              title={availableUpdate
+                ? t('toolbar.installUpdateTitle', { version: availableUpdate.version })
+                : t('toolbar.checkUpdateTitle')}
               onClick={() => void (availableUpdate ? installAvailableUpdate() : checkForUpdates())}
             >
               {isInstallingUpdate || isCheckingUpdate ? (
@@ -676,19 +794,19 @@ export const App = (): ReactElement => {
                 <RefreshCw size={15} />
               )}
               <span>{isInstallingUpdate
-                ? `更新中 ${updateProgress ?? 0}%`
+                ? t('toolbar.updating', { progress: updateProgress ?? 0 })
                 : isCheckingUpdate
-                  ? '检查中'
+                  ? t('toolbar.checking')
                   : availableUpdate
-                    ? `更新至 v${availableUpdate.version}`
-                    : '检查更新'}</span>
+                    ? t('toolbar.updateTo', { version: availableUpdate.version })
+                    : t('toolbar.checkUpdate')}</span>
             </button> : null}
-            <div className="view-mode-switch" aria-label="项目展示方式" role="group">
+            <div className="view-mode-switch" aria-label={t('toolbar.viewMode')} role="group">
               <button
                 className={config?.projectViewMode !== 'grid' ? 'active' : ''}
                 type="button"
-                title="表格视图"
-                aria-label="表格视图"
+                title={t('toolbar.tableView')}
+                aria-label={t('toolbar.tableView')}
                 aria-pressed={config?.projectViewMode !== 'grid'}
                 onClick={() => void updateProjectViewMode('table')}
               >
@@ -697,8 +815,8 @@ export const App = (): ReactElement => {
               <button
                 className={config?.projectViewMode === 'grid' ? 'active' : ''}
                 type="button"
-                title="网格视图"
-                aria-label="网格视图"
+                title={t('toolbar.gridView')}
+                aria-label={t('toolbar.gridView')}
                 aria-pressed={config?.projectViewMode === 'grid'}
                 onClick={() => void updateProjectViewMode('grid')}
               >
@@ -708,26 +826,23 @@ export const App = (): ReactElement => {
             <button
               className="stop-all-button"
               type="button"
-              title="停止所有运行中的项目"
+              title={t('toolbar.stopAllTitle')}
               disabled={runningProjectCount === 0 || isStoppingAll}
               onClick={() => void stopAllProjects()}
             >
               {isStoppingAll ? <LoaderCircle className="spin" size={15} /> : <Square size={14} />}
-              <span>全部停止</span>
+              <span>{t('toolbar.stopAll')}</span>
               <strong>{runningProjectCount}</strong>
             </button>
-            <button className="icon-button" type="button" title="刷新项目" onClick={refreshProjects}>
+            <button className="icon-button" type="button" title={t('toolbar.refreshProjects')} onClick={refreshProjects}>
               <RefreshCw size={17} />
             </button>
-            <button
-              className="icon-button"
-              type="button"
-              title="更换项目根目录"
+            <SettingsMenu
               disabled={isSelectingProjectRoot}
-              onClick={() => void selectProjectRoot()}
-            >
-              <Settings size={17} />
-            </button>
+              language={config?.language ?? detectAppLanguage()}
+              onChangeRoot={() => void selectProjectRoot()}
+              onLanguageChange={(language) => void updateLanguage(language)}
+            />
           </div>
         </header>
 
@@ -795,7 +910,7 @@ export const App = (): ReactElement => {
         ) : (
           <div className="empty-state">
             <ListFilter size={24} />
-            <p>暂无项目</p>
+            <p>{t('empty.noProjects')}</p>
           </div>
         )}
       </aside>
@@ -807,12 +922,12 @@ export const App = (): ReactElement => {
           <div className="root-directory-dialog">
             <FolderOpen size={28} />
             <div>
-              <h2 id="root-directory-title">需要配置项目根目录</h2>
-              <p>未找到默认目录 {config?.projectRoot ?? 'D:/Projects'}，选择一个可用目录后才能继续。</p>
+              <h2 id="root-directory-title">{t('rootGate.title')}</h2>
+              <p>{t('rootGate.description', { path: config?.projectRoot ?? 'D:/Projects' })}</p>
             </div>
             <button type="button" disabled={isSelectingProjectRoot} onClick={() => void selectProjectRoot()}>
               {isSelectingProjectRoot ? <LoaderCircle className="spin" size={16} /> : <FolderOpen size={16} />}
-              <span>选择项目根目录</span>
+              <span>{t('rootGate.select')}</span>
             </button>
           </div>
         </div>
@@ -827,6 +942,7 @@ interface WindowTitlebarProps {
 }
 
 const WindowTitlebar = ({ isDesktop, isMacOS }: WindowTitlebarProps): ReactElement => {
+  const { t } = useI18n();
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -874,16 +990,16 @@ const WindowTitlebar = ({ isDesktop, isMacOS }: WindowTitlebarProps): ReactEleme
         <strong>Web Profile</strong>
         <span>v{__APP_VERSION__}</span>
       </div>
-      <div className="titlebar-caption">前端项目启动器</div>
+      <div className="titlebar-caption">{t('titlebar.caption')}</div>
       {isDesktop && !isMacOS ? (
         <div className="window-controls">
-          <button type="button" title="最小化" aria-label="最小化" onClick={() => void runWindowAction(() => getCurrentWindow().minimize())}>
+          <button type="button" title={t('titlebar.minimize')} aria-label={t('titlebar.minimize')} onClick={() => void runWindowAction(() => getCurrentWindow().minimize())}>
             <Minus size={16} strokeWidth={1.7} />
           </button>
-          <button type="button" title={isMaximized ? '还原' : '最大化'} aria-label={isMaximized ? '还原' : '最大化'} onClick={() => void runWindowAction(toggleMaximize)}>
+          <button type="button" title={isMaximized ? t('titlebar.restore') : t('titlebar.maximize')} aria-label={isMaximized ? t('titlebar.restore') : t('titlebar.maximize')} onClick={() => void runWindowAction(toggleMaximize)}>
             {isMaximized ? <Square size={12} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
           </button>
-          <button className="window-close" type="button" title="关闭" aria-label="关闭" onClick={() => void runWindowAction(() => getCurrentWindow().close())}>
+          <button className="window-close" type="button" title={t('titlebar.close')} aria-label={t('titlebar.close')} onClick={() => void runWindowAction(() => getCurrentWindow().close())}>
             <X size={16} strokeWidth={1.7} />
           </button>
         </div>
@@ -906,6 +1022,66 @@ const FilterButton = ({ active, count, label, onClick }: FilterButtonProps): Rea
   </button>
 );
 
+interface SettingsMenuProps {
+  disabled?: boolean;
+  language: AppLanguage;
+  onChangeRoot: () => void;
+  onLanguageChange: (language: AppLanguage) => void;
+}
+
+const SettingsMenu = ({
+  disabled = false,
+  language,
+  onChangeRoot,
+  onLanguageChange
+}: SettingsMenuProps): ReactElement => {
+  const { t } = useI18n();
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          className="icon-button"
+          type="button"
+          title={t('settings.title')}
+          aria-label={t('settings.title')}
+          disabled={disabled}
+        >
+          <Settings size={17} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="settings-menu" align="end" sideOffset={6}>
+          <DropdownMenu.Item className="settings-menu-item settings-menu-item-with-icon" onSelect={onChangeRoot}>
+            <FolderOpen size={15} />
+            <span>{t('toolbar.changeRoot')}</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="settings-menu-separator" />
+          <DropdownMenu.Label className="settings-menu-label">{t('language.switch')}</DropdownMenu.Label>
+          <DropdownMenu.Item
+            className="settings-menu-item settings-menu-item-option"
+            onSelect={() => onLanguageChange('en')}
+          >
+            <span className="settings-menu-option-label">{t('language.en')}</span>
+            <span className="settings-menu-option-check">
+              {language === 'en' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            </span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className="settings-menu-item settings-menu-item-option"
+            onSelect={() => onLanguageChange('zh')}
+          >
+            <span className="settings-menu-option-label">{t('language.zh')}</span>
+            <span className="settings-menu-option-check">
+              {language === 'zh' ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
+            </span>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+};
+
 interface ProjectOpenControlProps {
   disabled?: boolean;
   tool: ProjectOpenTool;
@@ -913,12 +1089,16 @@ interface ProjectOpenControlProps {
   onToolChange: (tool: ProjectOpenTool) => Promise<void>;
 }
 
-const ProjectOpenControl = ({ disabled = false, tool, onOpen, onToolChange }: ProjectOpenControlProps): ReactElement => (
+const ProjectOpenControl = ({ disabled = false, tool, onOpen, onToolChange }: ProjectOpenControlProps): ReactElement => {
+  const { t } = useI18n();
+  const toolLabel = t(openToolLabelKey(tool));
+
+  return (
   <div className="project-open-control" onClick={(event) => event.stopPropagation()}>
     <button
       className="project-open-main"
       type="button"
-      title={`使用${projectOpenToolLabels[tool]}打开项目`}
+      title={t('openProject.withTool', { tool: toolLabel })}
       disabled={disabled}
       onClick={() => void onOpen()}
     >
@@ -926,7 +1106,7 @@ const ProjectOpenControl = ({ disabled = false, tool, onOpen, onToolChange }: Pr
     </button>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="project-open-select" type="button" title="选择打开工具" aria-label="选择打开工具" disabled={disabled}>
+        <button className="project-open-select" type="button" title={t('openProject.selectTool')} aria-label={t('openProject.selectTool')} disabled={disabled}>
           <ChevronDown size={14} />
         </button>
       </DropdownMenu.Trigger>
@@ -939,15 +1119,16 @@ const ProjectOpenControl = ({ disabled = false, tool, onOpen, onToolChange }: Pr
               onSelect={() => void onToolChange(value)}
             >
               <ProjectOpenToolIcon tool={value} />
-              <span>{projectOpenToolLabels[value]}</span>
-              {value === tool ? <Check aria-label="当前选择" size={14} /> : null}
+              <span>{t(openToolLabelKey(value))}</span>
+              {value === tool ? <Check aria-label={t('openProject.currentSelection')} size={14} /> : null}
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   </div>
-);
+  );
+};
 
 interface ProjectOpenToolIconProps {
   tool: ProjectOpenTool;
@@ -966,11 +1147,14 @@ interface RowMoreActionsProps {
   onRestart: () => Promise<void>;
 }
 
-const RowMoreActions = ({ canPull, canRestart, disabled, onPull, onRefresh, onRestart }: RowMoreActionsProps): ReactElement => (
+const RowMoreActions = ({ canPull, canRestart, disabled, onPull, onRefresh, onRestart }: RowMoreActionsProps): ReactElement => {
+  const { t } = useI18n();
+
+  return (
   <div className="row-more-control" onClick={(event) => event.stopPropagation()}>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" title="更多操作" aria-label="更多操作" disabled={disabled}>
+        <button type="button" title={t('moreActions.title')} aria-label={t('moreActions.title')} disabled={disabled}>
           <MoreHorizontal size={16} />
         </button>
       </DropdownMenu.Trigger>
@@ -979,22 +1163,23 @@ const RowMoreActions = ({ canPull, canRestart, disabled, onPull, onRefresh, onRe
           {canRestart ? (
             <DropdownMenu.Item className="row-more-menu-item" onSelect={() => void onRestart()}>
               <RotateCcw size={15} />
-              <span>重启项目</span>
+              <span>{t('moreActions.restart')}</span>
             </DropdownMenu.Item>
           ) : null}
           <DropdownMenu.Item className="row-more-menu-item" onSelect={() => void onRefresh()}>
             <RefreshCw size={15} />
-            <span>刷新 Git 状态</span>
+            <span>{t('moreActions.refreshGit')}</span>
           </DropdownMenu.Item>
           <DropdownMenu.Item className="row-more-menu-item" disabled={!canPull} onSelect={() => void onPull()}>
             <GitBranch size={15} />
-            <span>Pull</span>
+            <span>{t('moreActions.pull')}</span>
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   </div>
-);
+  );
+};
 
 interface ProjectTableProps {
   busyProjectId: string;
@@ -1038,11 +1223,13 @@ const ProjectTable = ({
   onStop,
   onToggleFavorite
 }: ProjectTableProps): ReactElement => {
+  const { t } = useI18n();
+
   if (loading) {
     return (
       <div className="loading-state">
         <LoaderCircle className="spin" size={22} />
-        <span>加载中</span>
+        <span>{t('action.loading')}</span>
       </div>
     );
   }
@@ -1051,7 +1238,7 @@ const ProjectTable = ({
     return (
       <div className="empty-state">
         <Search size={24} />
-        <p>没有匹配项目</p>
+        <p>{t('empty.noMatch')}</p>
       </div>
     );
   }
@@ -1070,13 +1257,13 @@ const ProjectTable = ({
         </colgroup>
         <thead>
           <tr>
-            <th>项目</th>
-            <th>分支</th>
-            <th>Git</th>
-            <th>启动命令</th>
-            <th>状态</th>
-            <th>URL</th>
-            <th>操作</th>
+            <th>{t('table.project')}</th>
+            <th>{t('table.branch')}</th>
+            <th>{t('table.git')}</th>
+            <th>{t('table.command')}</th>
+            <th>{t('table.status')}</th>
+            <th>{t('table.url')}</th>
+            <th>{t('table.actions')}</th>
           </tr>
         </thead>
         <tbody>
@@ -1087,13 +1274,18 @@ const ProjectTable = ({
             const isStarting = startingProjectIds.has(project.id);
             const isRunning = aggregate.liveCount > 0;
             return (
-              <tr className={selectedProjectId === project.id ? 'selected' : ''} key={project.id} onClick={() => onSelect(project.id)}>
+              <tr
+                className={selectedProjectId === project.id ? 'selected' : ''}
+                data-project-id={project.id}
+                key={project.id}
+                onClick={() => onSelect(project.id)}
+              >
                 <td>
                   <div className="project-cell">
                     <button
                       className={`favorite-button ${project.isFavorite ? 'is-favorite' : ''}`}
                       type="button"
-                      title="收藏"
+                      title={t('action.favorite')}
                       onClick={(event) => {
                         event.stopPropagation();
                         void onToggleFavorite(project, !project.isFavorite);
@@ -1123,7 +1315,7 @@ const ProjectTable = ({
                           key={url}
                           className="url-open-button"
                           type="button"
-                          title="用浏览器打开"
+                          title={t('action.openInBrowser')}
                           onClick={(event) => {
                             event.stopPropagation();
                             void onOpenUrl(
@@ -1154,18 +1346,18 @@ const ProjectTable = ({
                     {isStarting ? (
                       <button
                         type="button"
-                        title="项目启动中，点击停止全部服务"
+                        title={t('action.startingClickStop')}
                         disabled={isBusy}
                         onClick={() => void onStop(project)}
                       >
                         <LoaderCircle className="spin" size={15} />
                       </button>
                     ) : isRunning ? (
-                      <button type="button" title="停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
+                      <button type="button" title={t('action.stopAll')} disabled={isBusy} onClick={() => void onStop(project)}>
                         <Square size={15} />
                       </button>
                     ) : (
-                      <button type="button" title="启动" disabled={isBusy} onClick={() => void onStart(project)}>
+                      <button type="button" title={t('action.start')} disabled={isBusy} onClick={() => void onStart(project)}>
                         <Play size={15} />
                       </button>
                     )}
@@ -1210,11 +1402,13 @@ const ProjectGrid = ({
   onStop,
   onToggleFavorite
 }: ProjectGridProps): ReactElement => {
+  const { t } = useI18n();
+
   if (loading) {
     return (
       <div className="loading-state">
         <LoaderCircle className="spin" size={22} />
-        <span>加载中</span>
+        <span>{t('action.loading')}</span>
       </div>
     );
   }
@@ -1223,7 +1417,7 @@ const ProjectGrid = ({
     return (
       <div className="empty-state">
         <Search size={24} />
-        <p>没有匹配项目</p>
+        <p>{t('empty.noMatch')}</p>
       </div>
     );
   }
@@ -1241,11 +1435,12 @@ const ProjectGrid = ({
           return (
             <article
               className={`project-card ${selectedProjectId === project.id ? 'selected' : ''}`}
+              data-project-id={project.id}
               key={project.id}
               tabIndex={0}
               onClick={() => onSelect(project.id)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
+                if (event.key === ' ') {
                   event.preventDefault();
                   onSelect(project.id);
                 }
@@ -1255,7 +1450,7 @@ const ProjectGrid = ({
                 <button
                   className={`favorite-button ${project.isFavorite ? 'is-favorite' : ''}`}
                   type="button"
-                  title={project.isFavorite ? '取消收藏' : '收藏'}
+                  title={project.isFavorite ? t('action.unfavorite') : t('action.favorite')}
                   onClick={(event) => {
                     event.stopPropagation();
                     void onToggleFavorite(project, !project.isFavorite);
@@ -1272,7 +1467,7 @@ const ProjectGrid = ({
 
               <div className="project-card-meta">
                 <div>
-                  <span>分支</span>
+                  <span>{t('details.branch')}</span>
                   <strong title={gitStatus?.branch || ''}>{gitStatus?.branch || '-'}</strong>
                 </div>
                 <div>
@@ -1280,7 +1475,7 @@ const ProjectGrid = ({
                   <GitBadge status={gitStatus} />
                 </div>
                 <div className="project-card-command">
-                  <span>启动命令</span>
+                  <span>{t('table.command')}</span>
                   <code title={project.startCommand}>{project.startCommand}</code>
                 </div>
               </div>
@@ -1293,7 +1488,7 @@ const ProjectGrid = ({
                       <button
                         key={url}
                         type="button"
-                        title="用浏览器打开"
+                        title={t('action.openInBrowser')}
                         onClick={(event) => {
                           event.stopPropagation();
                           void onOpenUrl(
@@ -1322,15 +1517,15 @@ const ProjectGrid = ({
                   onToolChange={onOpenToolChange}
                 />
                 {isStarting ? (
-                  <button type="button" title="项目启动中，点击停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
+                  <button type="button" title={t('action.startingClickStop')} disabled={isBusy} onClick={() => void onStop(project)}>
                     <LoaderCircle className="spin" size={15} />
                   </button>
                 ) : isRunning ? (
-                  <button type="button" title="停止全部服务" disabled={isBusy} onClick={() => void onStop(project)}>
+                  <button type="button" title={t('action.stopAll')} disabled={isBusy} onClick={() => void onStop(project)}>
                     <Square size={15} />
                   </button>
                 ) : (
-                  <button type="button" title="启动" disabled={isBusy} onClick={() => void onStart(project)}>
+                  <button type="button" title={t('action.start')} disabled={isBusy} onClick={() => void onStart(project)}>
                     <Play size={15} />
                   </button>
                 )}
@@ -1386,6 +1581,7 @@ const ProjectDetails = ({
   onSaveCommand,
   onStopRun
 }: ProjectDetailsProps): ReactElement => {
+  const { t } = useI18n();
   const [command, setCommand] = useState(project.startCommand);
   const aggregate = getProjectRunAggregate(processStates, project.id);
   const runTabs = useMemo(
@@ -1422,8 +1618,8 @@ const ProjectDetails = ({
             <button
               className="detail-path-copy"
               type="button"
-              title="复制项目路径"
-              aria-label="复制项目路径"
+              title={t('details.copyPath')}
+              aria-label={t('details.copyPath')}
               onClick={() => void onCopyPath(project)}
             >
               <Copy size={14} />
@@ -1436,7 +1632,7 @@ const ProjectDetails = ({
             onOpen={() => onOpenProject(project)}
             onToolChange={onOpenToolChange}
           />
-          <button className="icon-button danger" type="button" title="隐藏项目" onClick={() => void onHide(project, !project.isHidden)}>
+          <button className="icon-button danger" type="button" title={t('details.hideProject')} onClick={() => void onHide(project, !project.isHidden)}>
             <Trash2 size={16} />
           </button>
         </div>
@@ -1445,26 +1641,26 @@ const ProjectDetails = ({
       <div className="details-body">
         <div className="details-summary">
           <section className="status-section">
-            <h3>状态</h3>
+            <h3>{t('details.status')}</h3>
             <div className="status-grid">
               <div>
-                <span>分支</span>
+                <span>{t('details.branch')}</span>
                 <strong>{gitStatus?.branch || '-'}</strong>
               </div>
               <div>
-                <span>Git</span>
-                <strong>{gitStatus ? gitLabel(gitStatus) : '-'}</strong>
+                <span>{t('table.git')}</span>
+                <strong>{gitStatus ? gitLabel(gitStatus, t) : '-'}</strong>
               </div>
               <div>
-                <span>运行</span>
-                <strong>{formatAggregateStatus(aggregate)}</strong>
+                <span>{t('details.run')}</span>
+                <strong>{formatAggregateStatus(aggregate, t)}</strong>
               </div>
               <div>
-                <span>端口</span>
+                <span>{t('details.port')}</span>
                 <strong>{formatUrlPorts(projectUrls)}</strong>
               </div>
               <div>
-                <span>包管理</span>
+                <span>{t('details.packageManager')}</span>
                 <strong>{project.packageInfo?.packageManager ?? '-'}</strong>
               </div>
             </div>
@@ -1472,17 +1668,17 @@ const ProjectDetails = ({
 
           <div className="details-controls">
             <section>
-              <h3>启动</h3>
+              <h3>{t('details.start')}</h3>
               <div className="command-editor">
                 <input value={command} onChange={(event) => setCommand(event.target.value)} />
                 <button type="button" onClick={() => void onSaveCommand(project, command)}>
-                  保存
+                  {t('details.save')}
                 </button>
               </div>
             </section>
 
             <section className="visit-section">
-              <h3>访问</h3>
+              <h3>{t('details.visit')}</h3>
               {projectUrls.length > 0 ? (
                 <div className="visit-list">
                   {projectUrls.map((url) => (
@@ -1490,7 +1686,7 @@ const ProjectDetails = ({
                       key={url}
                       className="visit-button"
                       type="button"
-                      title="用浏览器打开"
+                      title={t('action.openInBrowser')}
                       onClick={() =>
                         void onOpenUrl(
                           project,
@@ -1507,18 +1703,18 @@ const ProjectDetails = ({
                   ))}
                 </div>
               ) : (
-                <div className="visit-empty">等待启动日志输出 Local 地址</div>
+                <div className="visit-empty">{t('details.visitEmpty')}</div>
               )}
             </section>
 
             <section>
-              <h3>分支</h3>
+              <h3>{t('details.branches')}</h3>
               <select
                 value={gitStatus?.branch ?? ''}
                 disabled={branches.length === 0}
                 onChange={(event) => void onCheckout(project, event.target.value)}
               >
-                {branches.length === 0 ? <option value="">无分支</option> : null}
+                {branches.length === 0 ? <option value="">{t('details.noBranches')}</option> : null}
                 {branches.map((branch) => (
                   <option key={branch.name} value={branch.name}>
                     {branch.current ? '* ' : ''}{branch.name}
@@ -1529,7 +1725,7 @@ const ProjectDetails = ({
           </div>
 
           <section className="scripts-section">
-            <h3>Scripts</h3>
+            <h3>{t('details.scripts')}</h3>
             <div className="script-list">
               {Object.entries(project.packageInfo?.scripts ?? {}).map(([name]) => {
                 const scriptCommand = buildScriptCommand(project, name);
@@ -1539,11 +1735,11 @@ const ProjectDetails = ({
                     className="script-item"
                     key={name}
                     type="button"
-                    title={scriptRunning ? `${name} 运行中` : `执行 ${name}`}
+                    title={scriptRunning ? t('details.scriptRunning', { name }) : t('details.runScript', { name })}
                     disabled={scriptRunning}
                     onClick={() => void onRunScript(project, name)}
                   >
-                    <strong>{name}{scriptRunning ? ' · 运行中' : ''}</strong>
+                    <strong>{name}{scriptRunning ? t('details.scriptRunningSuffix') : ''}</strong>
                     <code>{scriptCommand}</code>
                   </button>
                 );
@@ -1553,9 +1749,9 @@ const ProjectDetails = ({
         </div>
 
         <section className="log-section">
-          <h3>日志</h3>
+          <h3>{t('details.logs')}</h3>
           {runTabs.length > 0 ? (
-            <div className="log-tabs" role="tablist" aria-label="服务日志">
+            <div className="log-tabs" role="tablist" aria-label={t('details.logTabs')}>
               {runTabs.map((tab) => (
                 <button
                   className={`log-tab ${activeTab?.runId === tab.runId ? 'active' : ''}`}
@@ -1567,7 +1763,7 @@ const ProjectDetails = ({
                   onClick={() => setSelectedRunId(tab.runId)}
                 >
                   <span>{truncateCommand(tab.command)}</span>
-                  {isLiveRunState(tab.state) ? <em>运行中</em> : null}
+                  {isLiveRunState(tab.state) ? <em>{t('status.running')}</em> : null}
                 </button>
               ))}
             </div>
@@ -1576,15 +1772,15 @@ const ProjectDetails = ({
             <div className="log-run-header">
               <code title={activeTab.command}>{activeTab.command}</code>
               {isLiveRunState(activeTab.state) || activeTab.state === 'stopping' ? (
-                <button type="button" title="停止该服务" onClick={() => void onStopRun(project, activeTab.runId)}>
+                <button type="button" title={t('details.stopService')} onClick={() => void onStopRun(project, activeTab.runId)}>
                   <Square size={14} />
-                  <span>停止</span>
+                  <span>{t('details.stop')}</span>
                 </button>
               ) : null}
             </div>
           ) : null}
           <div className="logs">
-            {!activeTab || activeLogs.length === 0 ? <span className="muted">暂无日志</span> : null}
+            {!activeTab || activeLogs.length === 0 ? <span className="muted">{t('details.noLogs')}</span> : null}
             {activeLogs.map((entry) => (
               <p className={entry.stream} key={`${entry.runId}-${entry.timestamp}-${entry.line}`}>
                 <span>{entry.timestamp.slice(11, 19)}</span>
@@ -1603,29 +1799,33 @@ interface GitBadgeProps {
 }
 
 const GitBadge = ({ status }: GitBadgeProps): ReactElement => {
+  const { t } = useI18n();
   if (!status) {
-    return <span className="badge muted">未刷新</span>;
+    return <span className="badge muted">{t('git.notRefreshed')}</span>;
   }
-  return <span className={`badge ${status.workingTree}`}>{gitLabel(status)}</span>;
+  return <span className={`badge ${status.workingTree}`}>{gitLabel(status, t)}</span>;
 };
 
 interface RunBadgeProps {
   aggregate: ProjectRunAggregate;
 }
 
-const RunBadge = ({ aggregate }: RunBadgeProps): ReactElement => (
-  <span className={`badge run-${aggregate.badgeState}`}>{formatAggregateStatus(aggregate)}</span>
-);
-
-const gitLabel = (status: GitStatus): string => {
-  if (status.workingTree === 'not-git') {
-    return '非 Git';
-  }
-  const sync = status.ahead || status.behind ? ` +${status.ahead}/-${status.behind}` : '';
-  return `${status.workingTree === 'clean' ? '干净' : '有改动'}${sync}`;
+const RunBadge = ({ aggregate }: RunBadgeProps): ReactElement => {
+  const { t } = useI18n();
+  return <span className={`badge run-${aggregate.badgeState}`}>{formatAggregateStatus(aggregate, t)}</span>;
 };
 
-const errorMessage = (error: unknown): string => {
+const gitLabel = (status: GitStatus, t: Translator): string => {
+  if (status.workingTree === 'not-git') {
+    return t('git.notGit');
+  }
+  const sync = status.ahead || status.behind
+    ? t('git.sync', { ahead: status.ahead, behind: status.behind })
+    : '';
+  return `${status.workingTree === 'clean' ? t('git.clean') : t('git.dirty')}${sync}`;
+};
+
+const errorMessage = (error: unknown, t: Translator): string => {
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -1646,7 +1846,7 @@ const errorMessage = (error: unknown): string => {
       // fall through
     }
   }
-  return '操作失败';
+  return t('error.operationFailed');
 };
 
 const isLiveRunState = (state: ProjectProcessState['state']): boolean =>
@@ -1690,6 +1890,23 @@ interface ProjectRunTab {
   state: ProjectProcessState['state'];
   urls: string[];
 }
+
+const getProjectGridColumnCount = (): number => {
+  const cards = document.querySelectorAll('.project-grid [data-project-id]');
+  if (cards.length <= 1) {
+    return 1;
+  }
+
+  const firstTop = cards[0].getBoundingClientRect().top;
+  let columnCount = 0;
+  for (const card of cards) {
+    if (Math.abs(card.getBoundingClientRect().top - firstTop) > 1) {
+      break;
+    }
+    columnCount += 1;
+  }
+  return Math.max(1, columnCount);
+};
 
 const getProcessUrls = (state: ProjectProcessState | undefined): string[] => state?.urls ?? [];
 
@@ -1777,14 +1994,14 @@ const getProjectRunAggregate = (
   };
 };
 
-const formatAggregateStatus = (aggregate: ProjectRunAggregate): string => {
+const formatAggregateStatus = (aggregate: ProjectRunAggregate, t: Translator): string => {
   if (aggregate.liveCount > 1 && aggregate.badgeState === 'running') {
-    return `运行中 ×${aggregate.liveCount}`;
+    return t('status.runningCount', { count: aggregate.liveCount });
   }
   if (aggregate.liveCount > 1 && aggregate.badgeState === 'starting') {
-    return `启动中 ×${aggregate.liveCount}`;
+    return t('status.startingCount', { count: aggregate.liveCount });
   }
-  return statusText[aggregate.badgeState];
+  return t(statusLabelKey(aggregate.badgeState));
 };
 
 const collectProjectRunIds = (
@@ -1816,7 +2033,10 @@ const collectProjectRunTabs = (
       const entries = logs[runId] ?? [];
       const command =
         state?.command ??
-        entries.find((entry) => entry.stream === 'system' && entry.line.includes('执行启动命令'))?.line.replace(/^.*执行启动命令[:：]\s*/, '') ??
+        entries
+          .filter((entry) => entry.stream === 'system')
+          .map((entry) => extractCommandFromStartLog(entry.line))
+          .find((value): value is string => Boolean(value)) ??
         runId;
       return {
         runId,
@@ -1835,7 +2055,7 @@ const collectProjectRunTabs = (
 const truncateCommand = (command: string, maxLength = 28): string =>
   command.length > maxLength ? `${command.slice(0, maxLength - 1)}…` : command;
 
-const copyText = async (text: string): Promise<void> => {
+const copyText = async (text: string, t: Translator): Promise<void> => {
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -1854,7 +2074,7 @@ const copyText = async (text: string): Promise<void> => {
   const copied = document.execCommand('copy');
   textarea.remove();
   if (!copied) {
-    throw new Error('复制项目路径失败');
+    throw new Error(t('error.copyPathFailed'));
   }
 };
 
@@ -1862,14 +2082,15 @@ function getProjectSearchRank(
   project: ProjectInfo,
   gitStatus: GitStatus | undefined,
   aggregate: ProjectRunAggregate,
-  query: string
+  query: string,
+  t: Translator
 ): number {
   const terms = normalizeSearchTerms(query);
   if (terms.length === 0) {
     return 0;
   }
 
-  const fields = getProjectSearchFields(project, gitStatus, aggregate);
+  const fields = getProjectSearchFields(project, gitStatus, aggregate, t);
   const fullText = fields.map((field) => field.value).join(' ');
   if (!terms.every((term) => fullText.includes(term))) {
     return -1;
@@ -1889,7 +2110,8 @@ function normalizeSearchTerms(query: string): string[] {
 function getProjectSearchFields(
   project: ProjectInfo,
   gitStatus: GitStatus | undefined,
-  aggregate: ProjectRunAggregate
+  aggregate: ProjectRunAggregate,
+  t: Translator
 ): SearchField[] {
   const pathSegments = project.path.split(/[\\/]/).filter(Boolean);
   const scripts = Object.entries(project.packageInfo?.scripts ?? {}).flatMap(([name, script]) => [name, script]);
@@ -1900,10 +2122,10 @@ function getProjectSearchFields(
     { value: project.path, weight: 3 },
     { value: gitStatus?.branch ?? '', weight: 4 },
     { value: gitStatus?.upstream ?? '', weight: 5 },
-    { value: gitStatus ? gitLabel(gitStatus) : '', weight: 6 },
+    { value: gitStatus ? gitLabel(gitStatus, t) : '', weight: 6 },
     { value: project.startCommand, weight: 7 },
     { value: project.packageInfo?.packageManager ?? '', weight: 8 },
-    { value: formatAggregateStatus(aggregate), weight: 9 },
+    { value: formatAggregateStatus(aggregate, t), weight: 9 },
     { value: aggregate.urls.join(' '), weight: 10 },
     ...scripts.map((script) => ({ value: script, weight: 11 }))
   ].map((field) => ({ ...field, value: field.value.toLowerCase() }));

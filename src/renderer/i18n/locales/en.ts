@@ -1,0 +1,145 @@
+import type { TranslationKey } from './zh';
+
+const en: Record<TranslationKey, string> = {
+  'status.idle': 'Idle',
+  'status.starting': 'Starting',
+  'status.running': 'Running',
+  'status.stopping': 'Stopping',
+  'status.exited': 'Exited',
+  'status.failed': 'Failed',
+  'status.runningCount': 'Running ×{count}',
+  'status.startingCount': 'Starting ×{count}',
+
+  'openTool.explorer': 'File Explorer',
+  'openTool.vscode': 'VSCode',
+  'openTool.cursor': 'Cursor',
+  'openTool.terminal': 'Terminal',
+  'openTool.iterm': 'iTerm',
+
+  'filter.all': 'All',
+  'filter.favorite': 'Favorites',
+  'filter.running': 'Running',
+  'filter.dirty': 'Dirty',
+  'filter.hidden': 'Hidden',
+
+  'git.notGit': 'Not Git',
+  'git.clean': 'Clean',
+  'git.dirty': 'Dirty',
+  'git.notRefreshed': 'Not refreshed',
+  'git.sync': ' +{ahead}/-{behind}',
+
+  'toast.projectsRefreshed': 'Project list refreshed',
+  'toast.urlNotReady': 'Project URL is not available yet',
+  'toast.pathCopied': 'Project path copied',
+  'toast.commandSaved': 'Start command saved',
+  'toast.rootUpdated': 'Project root updated',
+  'toast.updateFailed': 'Update failed: {message}',
+  'toast.updateFound': 'New version available: v{version}',
+  'toast.upToDate': 'You are on the latest version',
+  'toast.checkUpdateFailed': 'Failed to check for updates: {message}',
+
+  'search.placeholder': 'Search projects',
+  'search.clear': 'Clear search',
+
+  'sidebar.projectRoot': 'Project root',
+  'sidebar.changeRoot': 'Change root',
+
+  'toolbar.title': 'Project workspace',
+  'toolbar.projectCount': '{visible} / {total} projects',
+  'toolbar.checkUpdate': 'Check for updates',
+  'toolbar.checking': 'Checking',
+  'toolbar.updating': 'Updating {progress}%',
+  'toolbar.updateTo': 'Update to v{version}',
+  'toolbar.installUpdateTitle': 'Download and install Web Profile {version}',
+  'toolbar.checkUpdateTitle': 'Check for Web Profile updates',
+  'toolbar.tableView': 'Table view',
+  'toolbar.gridView': 'Grid view',
+  'toolbar.viewMode': 'Project layout',
+  'toolbar.stopAll': 'Stop all',
+  'toolbar.stopAllTitle': 'Stop all running projects',
+  'toolbar.refreshProjects': 'Refresh projects',
+  'toolbar.changeRoot': 'Change project root',
+
+  'preview.mockData': 'Mock data',
+
+  'empty.noProjects': 'No projects',
+  'empty.noMatch': 'No matching projects',
+
+  'rootGate.title': 'Project root required',
+  'rootGate.description': 'Default directory {path} was not found. Select a valid directory to continue.',
+  'rootGate.select': 'Select project root',
+
+  'titlebar.caption': 'Frontend project launcher',
+  'titlebar.minimize': 'Minimize',
+  'titlebar.maximize': 'Maximize',
+  'titlebar.restore': 'Restore',
+  'titlebar.close': 'Close',
+
+  'openProject.withTool': 'Open project with {tool}',
+  'openProject.selectTool': 'Choose open tool',
+  'openProject.currentSelection': 'Current selection',
+
+  'moreActions.title': 'More actions',
+  'moreActions.restart': 'Restart project',
+  'moreActions.refreshGit': 'Refresh Git status',
+  'moreActions.pull': 'Pull',
+
+  'table.project': 'Project',
+  'table.branch': 'Branch',
+  'table.git': 'Git',
+  'table.command': 'Start command',
+  'table.status': 'Status',
+  'table.url': 'URL',
+  'table.actions': 'Actions',
+
+  'action.favorite': 'Favorite',
+  'action.unfavorite': 'Unfavorite',
+  'action.openInBrowser': 'Open in browser',
+  'action.startingClickStop': 'Starting — click to stop all services',
+  'action.stopAll': 'Stop all services',
+  'action.start': 'Start',
+  'action.loading': 'Loading',
+
+  'details.copyPath': 'Copy project path',
+  'details.hideProject': 'Hide project',
+  'details.status': 'Status',
+  'details.branch': 'Branch',
+  'details.run': 'Run',
+  'details.port': 'Port',
+  'details.packageManager': 'Package manager',
+  'details.start': 'Start',
+  'details.save': 'Save',
+  'details.visit': 'Visit',
+  'details.visitEmpty': 'Waiting for Local URL in startup logs',
+  'details.branches': 'Branches',
+  'details.noBranches': 'No branches',
+  'details.scripts': 'Scripts',
+  'details.scriptRunning': '{name} running',
+  'details.runScript': 'Run {name}',
+  'details.scriptRunningSuffix': ' · running',
+  'details.logs': 'Logs',
+  'details.logTabs': 'Service logs',
+  'details.stopService': 'Stop this service',
+  'details.stop': 'Stop',
+  'details.noLogs': 'No logs yet',
+
+  'language.zh': '中文',
+  'language.en': 'English',
+  'language.switch': 'Language',
+
+  'settings.title': 'Settings',
+
+  'dialog.selectRootContinue': 'Select project root to continue',
+  'dialog.changeRoot': 'Change project root',
+
+  'error.operationFailed': 'Operation failed',
+  'error.copyPathFailed': 'Failed to copy project path',
+
+  'closeGuard.message': 'Some projects are still running. Stop all and exit?',
+  'closeGuard.title': 'Exit Web Profile',
+  'closeGuard.ok': 'Stop and exit',
+  'closeGuard.cancel': 'Cancel',
+  'closeGuard.failed': 'Failed to exit the app'
+};
+
+export const enMessages = en;

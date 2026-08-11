@@ -4,9 +4,15 @@ use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
-use crate::models::{ProjectOpenTool, TaskResult};
+use crate::models::{AppLanguage, ProjectOpenTool, TaskResult};
+use crate::i18n;
 
-pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) -> TaskResult {
+pub fn open_project(
+    app: &AppHandle,
+    project_path: &str,
+    tool: ProjectOpenTool,
+    language: AppLanguage,
+) -> TaskResult {
     let result: Result<(), String> = match tool {
         ProjectOpenTool::Explorer => app
             .opener()
@@ -29,26 +35,20 @@ pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) 
             .spawn()
             .map(|_| ())
             .map_err(|error| error.to_string()),
-        ProjectOpenTool::Iterm => open_iterm(project_path),
+        ProjectOpenTool::Iterm => open_iterm(project_path, language),
     };
-    let label = match tool {
-        ProjectOpenTool::Explorer => "资源管理器",
-        ProjectOpenTool::Vscode => "VSCode",
-        ProjectOpenTool::Cursor => "Cursor",
-        ProjectOpenTool::Terminal => "Windows Terminal",
-        ProjectOpenTool::Iterm => "iTerm",
-    };
+    let label = i18n::open_tool_label(language, tool);
 
     match result {
         Ok(()) => TaskResult {
             ok: true,
-            message: format!("已使用{label}打开项目"),
+            message: i18n::opened_project_with_tool(language, label),
             stderr: None,
             exit_code: None,
         },
         Err(error) => TaskResult {
             ok: false,
-            message: format!("无法使用{label}打开项目：{error}"),
+            message: i18n::open_project_failed(language, label, &error),
             stderr: None,
             exit_code: None,
         },
@@ -56,7 +56,7 @@ pub fn open_project(app: &AppHandle, project_path: &str, tool: ProjectOpenTool) 
 }
 
 #[cfg(target_os = "macos")]
-fn open_iterm(project_path: &str) -> Result<(), String> {
+fn open_iterm(project_path: &str, _language: AppLanguage) -> Result<(), String> {
     Command::new("open")
         .args(["-a", "iTerm", project_path])
         .spawn()
@@ -65,18 +65,18 @@ fn open_iterm(project_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn open_iterm(_project_path: &str) -> Result<(), String> {
-    Err("iTerm 仅支持 macOS".to_string())
+fn open_iterm(_project_path: &str, language: AppLanguage) -> Result<(), String> {
+    Err(i18n::iterm_macos_only(language))
 }
 
-pub fn open_http_url(app: &AppHandle, url: &str) -> TaskResult {
+pub fn open_http_url(app: &AppHandle, url: &str, language: AppLanguage) -> TaskResult {
     let valid_url = Url::parse(url)
         .ok()
         .filter(|parsed| matches!(parsed.scheme(), "http" | "https"));
     if valid_url.is_none() {
         return TaskResult {
             ok: false,
-            message: format!("无法打开非 HTTP 地址：{url}"),
+            message: i18n::non_http_url(language, url),
             stderr: None,
             exit_code: None,
         };
@@ -85,13 +85,13 @@ pub fn open_http_url(app: &AppHandle, url: &str) -> TaskResult {
     match app.opener().open_url(url, None::<&str>) {
         Ok(()) => TaskResult {
             ok: true,
-            message: format!("已打开：{url}"),
+            message: i18n::opened_url(language, url),
             stderr: None,
             exit_code: None,
         },
         Err(error) => TaskResult {
             ok: false,
-            message: format!("打开地址失败：{error}"),
+            message: i18n::open_url_failed(language, &error.to_string()),
             stderr: None,
             exit_code: None,
         },

@@ -24,7 +24,8 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 
 use crate::{
-    models::{ProjectInfo, ProjectLogEntry, ProjectProcessState, TaskResult},
+    i18n,
+    models::{AppLanguage, ProjectInfo, ProjectLogEntry, ProjectProcessState, TaskResult},
     utils::{
         command::{run_command, CommandResult},
         log::{merge_dev_server_url, strip_ansi},
@@ -129,6 +130,7 @@ impl ProcessManager {
         self: &Arc<Self>,
         project: &ProjectInfo,
         command: Option<&str>,
+        language: AppLanguage,
     ) -> ProjectProcessState {
         let command_line = command
             .map(str::trim)
@@ -158,7 +160,7 @@ impl ProcessManager {
                 exited_at: Some(Utc::now().to_rfc3339()),
                 exit_code: None,
                 urls: Vec::new(),
-                error: Some("启动命令为空".to_string()),
+                error: Some(i18n::empty_start_command(language)),
             };
             self.replace_record(state.clone(), generation, true).await;
             return state;
@@ -183,7 +185,7 @@ impl ProcessManager {
             &run_id,
             &project.id,
             "system",
-            format!("执行启动命令：{command_line}"),
+            i18n::start_command_log(language, &command_line),
         )
         .await;
 
@@ -228,7 +230,12 @@ impl ProcessManager {
                     error: Some(error.to_string()),
                 };
                 self.replace_record(failed.clone(), generation, true).await;
-                self.append_log(&run_id, &project.id, "system", format!("启动失败：{error}"))
+                self.append_log(
+                    &run_id,
+                    &project.id,
+                    "system",
+                    i18n::start_failed_log(language, &error.to_string()),
+                )
                     .await;
                 return failed;
             }
@@ -296,6 +303,7 @@ impl ProcessManager {
         self: &Arc<Self>,
         project_id: &str,
         run_id: &str,
+        language: AppLanguage,
     ) -> Result<ProjectProcessState, String> {
         let (pid, generation, current_state) = {
             let mut processes = self.processes.lock().await;
@@ -344,7 +352,12 @@ impl ProcessManager {
                         self.emit_value("process-state", &record.state);
                     }
                     drop(processes);
-                    self.append_log(run_id, project_id, "system", format!("停止失败：{error}"))
+                    self.append_log(
+                        run_id,
+                        project_id,
+                        "system",
+                        i18n::stop_failed_log(language, &error),
+                    )
                         .await;
                     return Err(error);
                 }
@@ -373,7 +386,12 @@ impl ProcessManager {
         }
         drop(processes);
         self.emit_value("process-state", &stopped);
-        self.append_log(run_id, project_id, "system", "已停止项目进程".to_string())
+        self.append_log(
+            run_id,
+            project_id,
+            "system",
+            i18n::process_stopped_log(language),
+        )
             .await;
         Ok(stopped)
     }
@@ -382,17 +400,18 @@ impl ProcessManager {
         self: &Arc<Self>,
         project: &ProjectInfo,
         run_id: &str,
+        language: AppLanguage,
     ) -> Result<ProjectProcessState, String> {
         let previous = self.get_state(run_id).await;
         if !previous.run_id.is_empty() && previous.project_id != project.id {
             return Err(format!("运行实例与项目不匹配：{run_id}"));
         }
         let command = previous.command.clone();
-        self.stop(&project.id, run_id).await?;
-        Ok(self.start(project, command.as_deref()).await)
+        self.stop(&project.id, run_id, language).await?;
+        Ok(self.start(project, command.as_deref(), language).await)
     }
 
-    pub async fn stop_project_runs(self: &Arc<Self>, project_id: &str) -> TaskResult {
+    pub async fn stop_project_runs(self: &Arc<Self>, project_id: &str, language: AppLanguage) -> TaskResult {
         let run_ids: Vec<String> = self
             .processes
             .lock()
@@ -410,30 +429,34 @@ impl ProcessManager {
         if run_ids.is_empty() {
             return TaskResult {
                 ok: true,
-                message: "当前项目没有运行中的服务".to_string(),
+                message: i18n::no_running_services(language),
                 stderr: None,
                 exit_code: None,
             };
         }
 
         let results =
-            futures::future::join_all(run_ids.iter().map(|run_id| self.stop(project_id, run_id)))
-                .await;
+            futures::future::join_all(
+                run_ids
+                    .iter()
+                    .map(|run_id| self.stop(project_id, run_id, language)),
+            )
+            .await;
         let failed = results.iter().filter(|result| result.is_err()).count();
         let stopped = results.len() - failed;
         TaskResult {
             ok: failed == 0,
             message: if failed == 0 {
-                format!("已停止该项目的 {stopped} 个服务")
+                i18n::stopped_project_services(language, stopped)
             } else {
-                format!("已停止 {stopped} 个服务，{failed} 个服务停止失败")
+                i18n::stopped_with_failures(language, stopped, failed)
             },
             stderr: None,
             exit_code: None,
         }
     }
 
-    pub async fn stop_all(self: &Arc<Self>) -> TaskResult {
+    pub async fn stop_all(self: &Arc<Self>, language: AppLanguage) -> TaskResult {
         let targets: Vec<(String, String)> = self
             .processes
             .lock()
@@ -450,7 +473,7 @@ impl ProcessManager {
         if targets.is_empty() {
             return TaskResult {
                 ok: true,
-                message: "当前没有运行中的项目".to_string(),
+                message: i18n::no_running_projects(language),
                 stderr: None,
                 exit_code: None,
             };
@@ -459,7 +482,7 @@ impl ProcessManager {
         let results = futures::future::join_all(
             targets
                 .iter()
-                .map(|(project_id, run_id)| self.stop(project_id, run_id)),
+                .map(|(project_id, run_id)| self.stop(project_id, run_id, language)),
         )
         .await;
         let failed = results.iter().filter(|result| result.is_err()).count();
@@ -467,9 +490,9 @@ impl ProcessManager {
         TaskResult {
             ok: failed == 0,
             message: if failed == 0 {
-                format!("已停止全部 {stopped} 个运行中的服务")
+                i18n::stopped_all_services(language, stopped)
             } else {
-                format!("已停止 {stopped} 个服务，{failed} 个服务停止失败")
+                i18n::stopped_with_failures(language, stopped, failed)
             },
             stderr: None,
             exit_code: None,
@@ -655,12 +678,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::{make_fixture_project, ProcessManager};
+    use crate::models::AppLanguage;
 
     #[tokio::test]
     async fn rejects_empty_command_without_overwriting_active_runs() {
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
         let project = make_fixture_project("fixture", ".", "");
-        let failed = manager.start(&project, Some("   ")).await;
+        let failed = manager.start(&project, Some("   "), AppLanguage::Zh).await;
         assert_eq!(failed.state, "failed");
         assert!(failed.run_id.starts_with("fixture#"));
         assert_eq!(failed.error.as_deref(), Some("启动命令为空"));
@@ -699,13 +723,13 @@ mod tests {
             );
         }
 
-        let again = manager.start(&project, Some("npm run dev")).await;
+        let again = manager.start(&project, Some("npm run dev"), AppLanguage::Zh).await;
         assert_eq!(again.run_id, "dup#99");
         assert_eq!(again.state, "running");
 
         // 不同命令应新建 run，即使命令本身会立刻失败
         let other = manager
-            .start(&project, Some("__web_profile_missing_command__"))
+            .start(&project, Some("__web_profile_missing_command__"), AppLanguage::Zh)
             .await;
         assert_ne!(other.run_id, "dup#99");
         assert_eq!(
@@ -723,6 +747,7 @@ mod unix_tests {
     use tokio::time::sleep;
 
     use super::{make_fixture_project, ProcessManager};
+    use crate::models::AppLanguage;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn starts_streams_and_stops_a_unix_process_tree() {
@@ -743,7 +768,7 @@ mod unix_tests {
             make_fixture_project("fixture", &temp.path().to_string_lossy(), "node fixture.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let running = manager.start(&project, None).await;
+        let running = manager.start(&project, None, AppLanguage::Zh).await;
         assert_eq!(running.state, "running");
         let run_id = running.run_id.clone();
         sleep(Duration::from_millis(500)).await;
@@ -763,7 +788,7 @@ mod unix_tests {
             .any(|entry| entry.line.contains("执行启动命令：node fixture.js")));
 
         let stopped = manager
-            .stop(&project.id, &run_id)
+            .stop(&project.id, &run_id, AppLanguage::Zh)
             .await
             .expect("停止应成功");
         assert_eq!(stopped.state, "exited");
@@ -793,13 +818,13 @@ mod unix_tests {
         let project = make_fixture_project("multi", &temp.path().to_string_lossy(), "node a.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let first = manager.start(&project, Some("node a.js")).await;
-        let second = manager.start(&project, Some("node b.js")).await;
+        let first = manager.start(&project, Some("node a.js"), AppLanguage::Zh).await;
+        let second = manager.start(&project, Some("node b.js"), AppLanguage::Zh).await;
         assert_eq!(first.state, "running");
         assert_eq!(second.state, "running");
         assert_ne!(first.run_id, second.run_id);
 
-        let duplicate = manager.start(&project, Some("node a.js")).await;
+        let duplicate = manager.start(&project, Some("node a.js"), AppLanguage::Zh).await;
         assert_eq!(duplicate.run_id, first.run_id);
 
         sleep(Duration::from_millis(500)).await;
@@ -818,12 +843,12 @@ mod unix_tests {
         assert!(!second_logs.iter().any(|entry| entry.line.contains("4001")));
 
         manager
-            .stop(&project.id, &first.run_id)
+            .stop(&project.id, &first.run_id, AppLanguage::Zh)
             .await
             .expect("停止第一个服务应成功");
         assert_eq!(manager.get_state(&second.run_id).await.state, "running");
 
-        manager.stop_project_runs(&project.id).await;
+        manager.stop_project_runs(&project.id, AppLanguage::Zh).await;
         assert!(!manager.has_running_projects().await);
     }
 
@@ -846,7 +871,7 @@ mod unix_tests {
             make_fixture_project("multi-url", &temp.path().to_string_lossy(), "node fixture.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let running = manager.start(&project, None).await;
+        let running = manager.start(&project, None, AppLanguage::Zh).await;
         assert_eq!(running.state, "running");
         let run_id = running.run_id.clone();
         sleep(Duration::from_millis(500)).await;
@@ -859,7 +884,7 @@ mod unix_tests {
         );
 
         manager
-            .stop(&project.id, &run_id)
+            .stop(&project.id, &run_id, AppLanguage::Zh)
             .await
             .expect("停止应成功");
     }
@@ -873,6 +898,7 @@ mod windows_tests {
     use tokio::time::sleep;
 
     use super::{make_fixture_project, ProcessManager};
+    use crate::models::AppLanguage;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn starts_streams_and_stops_a_windows_process_tree() {
@@ -893,7 +919,7 @@ mod windows_tests {
             make_fixture_project("fixture", &temp.path().to_string_lossy(), "node fixture.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let running = manager.start(&project, None).await;
+        let running = manager.start(&project, None, AppLanguage::Zh).await;
         assert_eq!(running.state, "running");
         let run_id = running.run_id.clone();
         sleep(Duration::from_millis(500)).await;
@@ -913,7 +939,7 @@ mod windows_tests {
             .any(|entry| entry.line.contains("执行启动命令：node fixture.js")));
 
         let stopped = manager
-            .stop(&project.id, &run_id)
+            .stop(&project.id, &run_id, AppLanguage::Zh)
             .await
             .expect("停止应成功");
         assert_eq!(stopped.state, "exited");
@@ -943,13 +969,13 @@ mod windows_tests {
         let project = make_fixture_project("multi", &temp.path().to_string_lossy(), "node a.js");
         let manager = ProcessManager::new(50, Arc::new(|_, _| {}));
 
-        let first = manager.start(&project, Some("node a.js")).await;
-        let second = manager.start(&project, Some("node b.js")).await;
+        let first = manager.start(&project, Some("node a.js"), AppLanguage::Zh).await;
+        let second = manager.start(&project, Some("node b.js"), AppLanguage::Zh).await;
         assert_eq!(first.state, "running");
         assert_eq!(second.state, "running");
         assert_ne!(first.run_id, second.run_id);
 
-        let duplicate = manager.start(&project, Some("node a.js")).await;
+        let duplicate = manager.start(&project, Some("node a.js"), AppLanguage::Zh).await;
         assert_eq!(duplicate.run_id, first.run_id);
 
         sleep(Duration::from_millis(500)).await;
@@ -968,12 +994,12 @@ mod windows_tests {
         assert!(!second_logs.iter().any(|entry| entry.line.contains("4001")));
 
         manager
-            .stop(&project.id, &first.run_id)
+            .stop(&project.id, &first.run_id, AppLanguage::Zh)
             .await
             .expect("停止第一个服务应成功");
         assert_eq!(manager.get_state(&second.run_id).await.state, "running");
 
-        manager.stop_project_runs(&project.id).await;
+        manager.stop_project_runs(&project.id, AppLanguage::Zh).await;
         assert!(!manager.has_running_projects().await);
     }
 }

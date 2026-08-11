@@ -1,5 +1,6 @@
 mod commands;
 mod controller;
+mod i18n;
 mod models;
 mod services;
 mod utils;
