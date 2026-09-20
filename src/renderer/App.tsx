@@ -1,8 +1,12 @@
 import {
+  Activity,
   Check,
   ChevronDown,
+  Code2,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   FolderOpen,
   GitBranch,
   Heart,
@@ -10,6 +14,7 @@ import {
   ListFilter,
   LoaderCircle,
   Maximize2,
+  Minimize2,
   Minus,
   MoreHorizontal,
   Play,
@@ -20,7 +25,7 @@ import {
   Square,
   Star,
   Table2,
-  Trash2,
+  Terminal,
   Download,
   X
 } from 'lucide-react';
@@ -29,7 +34,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactElement } from 'react';
 import type {
   AppConfig,
   AppLanguage,
@@ -62,6 +67,17 @@ import vscodeIcon from './assets/open-tools/vscode.ico';
 
 type StatusFilter = 'all' | 'favorite' | 'running' | 'dirty' | 'hidden';
 
+const detailPanelMinWidth = 320;
+const detailPanelMaxWidth = 600;
+const detailPanelWidthStorageKey = 'web-profile:detail-panel-width';
+
+interface DetailPanelResizeState {
+  pointerId: number;
+  startWidth: number;
+  startX: number;
+  width: number;
+}
+
 interface ToastState {
   type: 'success' | 'error' | 'info';
   message: string;
@@ -75,6 +91,18 @@ const projectOpenToolIcons: Record<ProjectOpenTool, string> = {
   cursor: cursorIcon,
   terminal: terminalIcon,
   iterm: itermIcon
+};
+
+/** 将详情栏宽度限制在桌面布局的可用范围内。 */
+const clampDetailPanelWidth = (width: number): number =>
+  Math.min(detailPanelMaxWidth, Math.max(detailPanelMinWidth, width));
+
+/** 读取用户上次调整的详情栏宽度。 */
+const getInitialDetailPanelWidth = (): number => {
+  const savedWidth = Number(window.localStorage.getItem(detailPanelWidthStorageKey));
+  return Number.isFinite(savedWidth) && savedWidth > 0
+    ? clampDetailPanelWidth(savedWidth)
+    : clampDetailPanelWidth(window.innerWidth * 0.24);
 };
 
 interface SearchField {
@@ -131,8 +159,10 @@ const AppShell = ({ api, config, isMacOS, isWebPreview, setConfig }: AppShellPro
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [detailPanelWidth, setDetailPanelWidth] = useState(getInitialDetailPanelWidth);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const promptedForProjectRootRef = useRef(false);
+  const detailPanelResizeRef = useRef<DetailPanelResizeState | null>(null);
 
   useEffect(() => {
     if (isWebPreview || !config) {
@@ -714,8 +744,62 @@ const AppShell = ({ api, config, isMacOS, isWebPreview, setConfig }: AppShellPro
     }
   };
 
+  const updateDetailPanelWidth = (width: number): void => {
+    const nextWidth = clampDetailPanelWidth(width);
+    setDetailPanelWidth(nextWidth);
+    window.localStorage.setItem(detailPanelWidthStorageKey, String(nextWidth));
+  };
+
+  const startDetailPanelResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    detailPanelResizeRef.current = {
+      pointerId: event.pointerId,
+      startWidth: detailPanelWidth,
+      startX: event.clientX,
+      width: detailPanelWidth
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add('is-resizing-detail');
+  };
+
+  const resizeDetailPanel = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const resizeState = detailPanelResizeRef.current;
+    if (!resizeState || resizeState.pointerId !== event.pointerId) return;
+    const nextWidth = clampDetailPanelWidth(resizeState.startWidth + resizeState.startX - event.clientX);
+    resizeState.width = nextWidth;
+    setDetailPanelWidth(nextWidth);
+  };
+
+  const stopDetailPanelResize = (): void => {
+    const resizeState = detailPanelResizeRef.current;
+    if (!resizeState) return;
+    window.localStorage.setItem(detailPanelWidthStorageKey, String(resizeState.width));
+    detailPanelResizeRef.current = null;
+    document.body.classList.remove('is-resizing-detail');
+  };
+
+  const handleDetailPanelResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 32 : 8;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      updateDetailPanelWidth(detailPanelWidth + step);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      updateDetailPanelWidth(detailPanelWidth - step);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      updateDetailPanelWidth(detailPanelMinWidth);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      updateDetailPanelWidth(detailPanelMaxWidth);
+    }
+  };
+
   return (
-    <main className={`app-shell ${isMacOS ? 'is-macos' : ''}`}>
+    <main
+      className={`app-shell ${isMacOS ? 'is-macos' : ''}`}
+      style={{ '--detail-panel-width': `${detailPanelWidth}px` } as CSSProperties}
+    >
       <WindowTitlebar isDesktop={!isWebPreview} isMacOS={isMacOS} />
 
       <aside className="sidebar">
@@ -889,6 +973,22 @@ const AppShell = ({ api, config, isMacOS, isWebPreview, setConfig }: AppShellPro
       </section>
 
       <aside className="detail-panel">
+        <div
+          className="detail-panel-resizer"
+          role="separator"
+          aria-label={t('details.resizePanel')}
+          aria-orientation="vertical"
+          aria-valuemin={detailPanelMinWidth}
+          aria-valuemax={detailPanelMaxWidth}
+          aria-valuenow={Math.round(detailPanelWidth)}
+          tabIndex={0}
+          title={t('details.resizePanel')}
+          onKeyDown={handleDetailPanelResizeKeyDown}
+          onLostPointerCapture={stopDetailPanelResize}
+          onPointerDown={startDetailPanelResize}
+          onPointerMove={resizeDetailPanel}
+          onPointerUp={stopDetailPanelResize}
+        />
         {selectedProject ? (
           <ProjectDetails
             branches={branches}
@@ -1275,10 +1375,19 @@ const ProjectTable = ({
             const isRunning = aggregate.liveCount > 0;
             return (
               <tr
+                aria-selected={selectedProjectId === project.id}
                 className={selectedProjectId === project.id ? 'selected' : ''}
                 data-project-id={project.id}
                 key={project.id}
+                tabIndex={0}
                 onClick={() => onSelect(project.id)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect(project.id);
+                  }
+                }}
               >
                 <td>
                   <div className="project-cell">
@@ -1440,7 +1549,8 @@ const ProjectGrid = ({
               tabIndex={0}
               onClick={() => onSelect(project.id)}
               onKeyDown={(event) => {
-                if (event.key === ' ') {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
                   onSelect(project.id);
                 }
@@ -1583,6 +1693,8 @@ const ProjectDetails = ({
 }: ProjectDetailsProps): ReactElement => {
   const { t } = useI18n();
   const [command, setCommand] = useState(project.startCommand);
+  const [isLogExpanded, setIsLogExpanded] = useState(false);
+  const [scriptQuery, setScriptQuery] = useState('');
   const aggregate = getProjectRunAggregate(processStates, project.id);
   const runTabs = useMemo(
     () => collectProjectRunTabs(processStates, logs, project.id),
@@ -1593,9 +1705,18 @@ const ProjectDetails = ({
   const activeLogs = activeTab ? logs[activeTab.runId] ?? [] : [];
   const projectUrls =
     activeTab && activeTab.urls.length > 0 ? activeTab.urls : aggregate.urls;
+  const scriptEntries = Object.entries(project.packageInfo?.scripts ?? {});
+  const normalizedScriptQuery = scriptQuery.trim().toLowerCase();
+  const visibleScriptEntries = normalizedScriptQuery
+    ? scriptEntries.filter(([name, script]) =>
+        name.toLowerCase().includes(normalizedScriptQuery) || script.toLowerCase().includes(normalizedScriptQuery)
+      )
+    : scriptEntries;
 
   useEffect(() => {
     setCommand(project.startCommand);
+    setIsLogExpanded(false);
+    setScriptQuery('');
   }, [project.id, project.startCommand]);
 
   useEffect(() => {
@@ -1608,22 +1729,40 @@ const ProjectDetails = ({
     }
   }, [runTabs, selectedRunId]);
 
+  useEffect(() => {
+    if (!isLogExpanded) return undefined;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setIsLogExpanded(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLogExpanded]);
+
   return (
     <div className="details">
-      <header>
-        <div>
-          <h2>{project.name}</h2>
-          <div className="detail-path">
-            <p title={project.path}>{project.path}</p>
-            <button
-              className="detail-path-copy"
-              type="button"
-              title={t('details.copyPath')}
-              aria-label={t('details.copyPath')}
-              onClick={() => void onCopyPath(project)}
-            >
-              <Copy size={14} />
-            </button>
+      <header className="details-header">
+        <div className="project-identity">
+          <span className="project-mark" aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span>
+          <div className="project-identity-copy">
+            <div className="details-title-line">
+              <h2>{project.name}</h2>
+              <span className={`detail-state run-${aggregate.badgeState}`}>
+                <span />
+                {formatAggregateStatus(aggregate, t)}
+              </span>
+            </div>
+            <div className="detail-path">
+              <p title={project.path}>{project.path}</p>
+              <button
+                className="detail-path-copy"
+                type="button"
+                title={t('details.copyPath')}
+                aria-label={t('details.copyPath')}
+                onClick={() => void onCopyPath(project)}
+              >
+                <Copy size={14} />
+              </button>
+            </div>
           </div>
         </div>
         <div className="details-header-actions">
@@ -1632,16 +1771,27 @@ const ProjectDetails = ({
             onOpen={() => onOpenProject(project)}
             onToolChange={onOpenToolChange}
           />
-          <button className="icon-button danger" type="button" title={t('details.hideProject')} onClick={() => void onHide(project, !project.isHidden)}>
-            <Trash2 size={16} />
+          <button
+            className="icon-button detail-visibility-button"
+            type="button"
+            title={project.isHidden ? t('details.restoreProject') : t('details.hideProject')}
+            aria-label={project.isHidden ? t('details.restoreProject') : t('details.hideProject')}
+            onClick={() => void onHide(project, !project.isHidden)}
+          >
+            {project.isHidden ? <Eye size={16} /> : <EyeOff size={16} />}
           </button>
         </div>
       </header>
 
       <div className="details-body">
         <div className="details-summary">
-          <section className="status-section">
-            <h3>{t('details.status')}</h3>
+          <section className="status-section detail-section">
+            <div className="detail-section-heading">
+              <div className="detail-section-title">
+                <Activity size={15} />
+                <h3>{t('details.status')}</h3>
+              </div>
+            </div>
             <div className="status-grid">
               <div>
                 <span>{t('details.branch')}</span>
@@ -1667,7 +1817,7 @@ const ProjectDetails = ({
           </section>
 
           <div className="details-controls">
-            <section>
+            <section className="detail-section">
               <h3>{t('details.start')}</h3>
               <div className="command-editor">
                 <input value={command} onChange={(event) => setCommand(event.target.value)} />
@@ -1677,7 +1827,7 @@ const ProjectDetails = ({
               </div>
             </section>
 
-            <section className="visit-section">
+            <section className="visit-section detail-section">
               <h3>{t('details.visit')}</h3>
               {projectUrls.length > 0 ? (
                 <div className="visit-list">
@@ -1703,13 +1853,16 @@ const ProjectDetails = ({
                   ))}
                 </div>
               ) : (
-                <div className="visit-empty">{t('details.visitEmpty')}</div>
+                <div className="visit-empty">
+                  <span>{t('details.visitEmpty')}</span>
+                </div>
               )}
             </section>
 
-            <section>
+            <section className="branch-section detail-section">
               <h3>{t('details.branches')}</h3>
               <select
+                aria-label={t('details.branches')}
                 value={gitStatus?.branch ?? ''}
                 disabled={branches.length === 0}
                 onChange={(event) => void onCheckout(project, event.target.value)}
@@ -1724,10 +1877,35 @@ const ProjectDetails = ({
             </section>
           </div>
 
-          <section className="scripts-section">
-            <h3>{t('details.scripts')}</h3>
+          <section className="scripts-section detail-section">
+            <div className="detail-section-heading">
+              <div className="detail-section-title">
+                <Code2 size={15} />
+                <h3>{t('details.scripts')}</h3>
+              </div>
+              <span>{t('details.scriptCount', { count: visibleScriptEntries.length })}</span>
+            </div>
+            <label className="script-search">
+              <Search size={14} aria-hidden="true" />
+              <input
+                type="search"
+                value={scriptQuery}
+                placeholder={t('details.searchScripts')}
+                onChange={(event) => setScriptQuery(event.target.value)}
+              />
+              {scriptQuery ? (
+                <button
+                  type="button"
+                  title={t('details.clearScriptSearch')}
+                  aria-label={t('details.clearScriptSearch')}
+                  onClick={() => setScriptQuery('')}
+                >
+                  <X size={13} />
+                </button>
+              ) : null}
+            </label>
             <div className="script-list">
-              {Object.entries(project.packageInfo?.scripts ?? {}).map(([name]) => {
+              {visibleScriptEntries.map(([name]) => {
                 const scriptCommand = buildScriptCommand(project, name);
                 const scriptRunning = Boolean(findActiveRunByCommand(processStates, project.id, scriptCommand));
                 return (
@@ -1744,49 +1922,75 @@ const ProjectDetails = ({
                   </button>
                 );
               })}
+              {visibleScriptEntries.length === 0 ? <div className="script-empty">{t('details.noMatchingScripts')}</div> : null}
             </div>
           </section>
         </div>
 
-        <section className="log-section">
-          <h3>{t('details.logs')}</h3>
-          {runTabs.length > 0 ? (
-            <div className="log-tabs" role="tablist" aria-label={t('details.logTabs')}>
-              {runTabs.map((tab) => (
-                <button
-                  className={`log-tab ${activeTab?.runId === tab.runId ? 'active' : ''}`}
-                  key={tab.runId}
-                  role="tab"
-                  type="button"
-                  aria-selected={activeTab?.runId === tab.runId}
-                  title={tab.command}
-                  onClick={() => setSelectedRunId(tab.runId)}
-                >
-                  <span>{truncateCommand(tab.command)}</span>
-                  {isLiveRunState(tab.state) ? <em>{t('status.running')}</em> : null}
-                </button>
+        <section className={`log-section detail-section ${isLogExpanded ? 'is-expanded' : ''}`}>
+          <div className="detail-section-heading">
+            <div className="detail-section-title">
+              <Terminal size={15} />
+              <h3>{t('details.logs')}</h3>
+            </div>
+            <div className="log-heading-actions">
+              <span>{t('details.logCount', { count: activeLogs.length })}</span>
+              <button
+                className="log-expand-button"
+                type="button"
+                title={isLogExpanded ? t('details.restoreLogs') : t('details.expandLogs')}
+                aria-label={isLogExpanded ? t('details.restoreLogs') : t('details.expandLogs')}
+                aria-pressed={isLogExpanded}
+                onClick={() => setIsLogExpanded((current) => !current)}
+              >
+                {isLogExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
+            </div>
+          </div>
+          <div className="log-content">
+            {runTabs.length > 0 ? (
+              <div className="log-tabs" role="tablist" aria-label={t('details.logTabs')}>
+                {runTabs.map((tab) => (
+                  <button
+                    className={`log-tab ${activeTab?.runId === tab.runId ? 'active' : ''}`}
+                    key={tab.runId}
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTab?.runId === tab.runId}
+                    title={tab.command}
+                    onClick={() => setSelectedRunId(tab.runId)}
+                  >
+                    <span>{truncateCommand(tab.command)}</span>
+                    {isLiveRunState(tab.state) ? <em>{t('status.running')}</em> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {activeTab ? (
+              <div className="log-run-header">
+                <code title={activeTab.command}>{activeTab.command}</code>
+                {isLiveRunState(activeTab.state) || activeTab.state === 'stopping' ? (
+                  <button type="button" title={t('details.stopService')} onClick={() => void onStopRun(project, activeTab.runId)}>
+                    <Square size={14} />
+                    <span>{t('details.stop')}</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="logs">
+              {!activeTab || activeLogs.length === 0 ? (
+                <div className="log-empty">
+                  <Terminal size={18} />
+                  <span>{t('details.noLogs')}</span>
+                </div>
+              ) : null}
+              {activeLogs.map((entry) => (
+                <p className={entry.stream} key={`${entry.runId}-${entry.timestamp}-${entry.line}`}>
+                  <span>{entry.timestamp.slice(11, 19)}</span>
+                  <code>{entry.line}</code>
+                </p>
               ))}
             </div>
-          ) : null}
-          {activeTab ? (
-            <div className="log-run-header">
-              <code title={activeTab.command}>{activeTab.command}</code>
-              {isLiveRunState(activeTab.state) || activeTab.state === 'stopping' ? (
-                <button type="button" title={t('details.stopService')} onClick={() => void onStopRun(project, activeTab.runId)}>
-                  <Square size={14} />
-                  <span>{t('details.stop')}</span>
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="logs">
-            {!activeTab || activeLogs.length === 0 ? <span className="muted">{t('details.noLogs')}</span> : null}
-            {activeLogs.map((entry) => (
-              <p className={entry.stream} key={`${entry.runId}-${entry.timestamp}-${entry.line}`}>
-                <span>{entry.timestamp.slice(11, 19)}</span>
-                <code>{entry.line}</code>
-              </p>
-            ))}
           </div>
         </section>
       </div>
