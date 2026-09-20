@@ -85,7 +85,7 @@ jobs:
             ${{ runner.os }}-cargo-release-
 
       - name: 安装前端依赖
-        run: npm ci
+        run: npm ci --omit=optional
 
       - name: 清理旧安装包产物
         shell: bash
