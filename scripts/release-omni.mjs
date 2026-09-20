@@ -5,12 +5,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { downloadFilename, packageRelease, requireDownloadUrl, root, siteFilename } from './package-release.mjs';
 
+const omniPackage = '@baioo-zc/omni-link-mcp@0.2.0';
+
+/** 返回按需启动 Omni Link MCP 的跨平台命令。 */
+function resolveOmniCommand() {
+  const args = ['--yes', omniPackage, '--base-url', 'https://omni.100bt.com'];
+  return process.platform === 'win32'
+    ? { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', 'npx', ...args] }
+    : { command: 'npx', args };
+}
+
 /** 连接官方 Omni Link MCP，凭证由公司 SSO 登录态管理。 */
 async function connectOmni() {
   const client = new Client({ name: 'web-profile-release', version: '1.0.0' });
+  const server = resolveOmniCommand();
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [fileURLToPath(import.meta.resolve('@baioo-zc/omni-link-mcp')), '--base-url', 'https://omni.100bt.com'],
+    command: server.command,
+    args: server.args,
     stderr: 'ignore',
   });
   await client.connect(transport);
