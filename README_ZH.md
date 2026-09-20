@@ -193,6 +193,25 @@ cargo test
 
 ## 5. 构建与发布
 
+### Omni Link 发布介绍页和 Windows 下载包
+
+发布使用两个独立节点：下载节点保留 ZIP，介绍页节点自动解压为静态网站。首次运行会通过公司 SSO 授权，并把两个固定节点的 ID 与分享地址保存在已忽略提交的 `release.local.json` 中；后续运行原地更新，链接不变。
+
+```powershell
+# 仅生成 dist/web-profile-windows-x64.zip，不上传
+npm run package:release
+
+# 一行完成校验、打包，并依次上传下载资源和介绍页
+npm run release:omni
+
+# 输入版本号后，构建安装版与便携版并完成上述发布
+npm run publish:omni
+```
+
+下载 ZIP 包含标准安装版和便携版。介绍页发布包为 `dist/web-profile-site.zip`，下载按钮在打包时替换为独立下载节点的 Omni Link 地址。命令结束时会分别输出“介绍页”和“下载资源”两条链接。
+
+`publish:omni` 会先显示当前版本并要求明确输入 `x.y.z` 版本号，允许同版本重发但拒绝降级；随后同步 npm、Tauri、Cargo 和介绍页版本，运行测试、类型检查、ESLint，构建 Windows 安装版与便携版，最后发布两个 Omni Link 节点。该命令不会触发 `prebuild` 的自动补丁号递增。
+
 > `build`、`build:portable`、`build:portable:desktop` 构建前会自动将补丁版本号加一，并同步 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`。不要用构建命令做无副作用的验证。
 
 | 命令 | 产物 |

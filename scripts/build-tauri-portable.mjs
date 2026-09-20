@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const rootDirectory = new URL('..', import.meta.url);
+const rootDirectory = fileURLToPath(new URL('..', import.meta.url));
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const buildArguments = process.platform === 'darwin'
   ? ['run', 'tauri', '--', 'build', '--bundles', 'app']
@@ -9,6 +10,7 @@ const buildArguments = process.platform === 'darwin'
 const run = (command, arguments_) => {
   const result = spawnSync(command, arguments_, {
     cwd: rootDirectory,
+    shell: process.platform === 'win32',
     stdio: 'inherit'
   });
 

@@ -1,7 +1,7 @@
 import { cp, mkdir, rm, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { arch, platform } from 'node:os';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 
 const appName = 'Web Profile';
 const rootDirectory = resolve(import.meta.dirname, '..');
@@ -17,7 +17,8 @@ const assertExists = async (path) => {
   }
 };
 
-if (!outputDirectory.startsWith(`${releaseRoot}/`) && outputDirectory !== releaseRoot) {
+const outputRelativePath = relative(releaseRoot, outputDirectory);
+if (outputRelativePath === '' || outputRelativePath.startsWith('..') || resolve(releaseRoot, outputRelativePath) !== outputDirectory) {
   throw new Error(`拒绝清理 release 目录外路径：${outputDirectory}`);
 }
 

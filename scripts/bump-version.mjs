@@ -1,80 +1,76 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
-const rootDirectory = resolve(import.meta.dirname, '..');
+export const rootDirectory = fileURLToPath(new URL('..', import.meta.url));
+const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
-/**
- * 读取 JSON 文件。
- * @param {string} relativePath 相对于项目根目录的文件路径
- * @returns {Promise<Record<string, unknown>>} JSON 对象
- */
-const readJson = async (relativePath) => {
-  const content = await readFile(resolve(rootDirectory, relativePath), 'utf8');
-  return JSON.parse(content);
-};
-
-/**
- * 写入格式化后的 JSON 文件。
- * @param {string} relativePath 相对于项目根目录的文件路径
- * @param {Record<string, unknown>} value JSON 对象
- * @returns {Promise<void>}
- */
-const writeJson = async (relativePath, value) => {
-  await writeFile(resolve(rootDirectory, relativePath), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-};
-
-/**
- * 将语义化版本的补丁号加一。
- * @param {string} version 当前版本号
- * @returns {string} 新版本号
- */
-const incrementPatchVersion = (version) => {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match) {
-    throw new Error(`不支持的版本号格式: ${version}`);
-  }
-
-  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
-};
-
-const packageJson = await readJson('package.json');
-const currentVersion = packageJson.version;
-if (typeof currentVersion !== 'string') {
-  throw new Error('package.json 中缺少有效的 version 字段');
+/** 校验并返回 x.y.z 版本号。 @param {string} version */
+export function validateVersion(version) {
+  if (!versionPattern.test(version)) throw new Error('版本号必须是 x.y.z，例如 0.2.0');
+  return version;
 }
 
-const requestedVersion = process.env.APP_VERSION;
-if (requestedVersion !== undefined && !/^\d+\.\d+\.\d+$/.test(requestedVersion)) {
-  throw new Error(`APP_VERSION 不是有效的语义化版本号: ${requestedVersion}`);
-}
-const nextVersion = requestedVersion ?? incrementPatchVersion(currentVersion);
-packageJson.version = nextVersion;
-
-const packageLock = await readJson('package-lock.json');
-packageLock.version = nextVersion;
-const lockPackages = packageLock.packages;
-if (typeof lockPackages === 'object' && lockPackages !== null && '' in lockPackages) {
-  const rootPackage = lockPackages[''];
-  if (typeof rootPackage === 'object' && rootPackage !== null) {
-    rootPackage.version = nextVersion;
-  }
+/** 将补丁版本加一。 @param {string} version */
+export function incrementPatchVersion(version) {
+  const parts = validateVersion(version).split('.').map(Number);
+  return `${parts[0]}.${parts[1]}.${parts[2] + 1}`;
 }
 
-const tauriConfig = await readJson('src-tauri/tauri.conf.json');
-tauriConfig.version = nextVersion;
-
-const cargoPath = resolve(rootDirectory, 'src-tauri/Cargo.toml');
-const cargoToml = await readFile(cargoPath, 'utf8');
-const cargoVersionPattern = /(^\[package\][\s\S]*?^version\s*=\s*")[^"]+("\s*$)/m;
-if (!cargoVersionPattern.test(cargoToml)) {
-  throw new Error('未能更新 src-tauri/Cargo.toml 中的 package.version');
+/** 读取并校验项目各处版本一致。 @param {string} [workspace] */
+export async function readCurrentVersion(workspace = rootDirectory) {
+  const packageJson = JSON.parse(await readFile(path.join(workspace, 'package.json'), 'utf8'));
+  const packageLock = JSON.parse(await readFile(path.join(workspace, 'package-lock.json'), 'utf8'));
+  const tauriConfig = JSON.parse(await readFile(path.join(workspace, 'src-tauri/tauri.conf.json'), 'utf8'));
+  const cargoToml = await readFile(path.join(workspace, 'src-tauri/Cargo.toml'), 'utf8');
+  const cargoLock = await readFile(path.join(workspace, 'src-tauri/Cargo.lock'), 'utf8');
+  const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(cargoToml)?.[1];
+  const cargoLockVersion = /\[\[package\]\]\r?\nname = "web-profile"\r?\nversion = "([^"]+)"/u.exec(cargoLock)?.[1];
+  const versions = [packageJson.version, packageLock.version, packageLock.packages?.['']?.version, tauriConfig.version, cargoVersion, cargoLockVersion];
+  if (versions.some((version) => version !== versions[0])) throw new Error(`项目版本不一致：${versions.join(', ')}`);
+  return validateVersion(versions[0]);
 }
-const nextCargoToml = cargoToml.replace(cargoVersionPattern, `$1${nextVersion}$2`);
 
-await Promise.all([
-  writeJson('package.json', packageJson),
-  writeJson('package-lock.json', packageLock),
-  writeJson('src-tauri/tauri.conf.json', tauriConfig),
-  writeFile(cargoPath, nextCargoToml, 'utf8')
-]);
+/** 一次性同步 npm、Tauri、Cargo 和介绍页版本。 @param {string} version @param {string} [workspace] */
+export async function syncVersion(version, workspace = rootDirectory) {
+  validateVersion(version);
+  const current = await readCurrentVersion(workspace);
+  const jsonFiles = ['package.json', 'package-lock.json', 'src-tauri/tauri.conf.json'];
+  const jsonValues = await Promise.all(jsonFiles.map(async (name) => JSON.parse(await readFile(path.join(workspace, name), 'utf8'))));
+  jsonValues[0].version = version;
+  jsonValues[1].version = version;
+  jsonValues[1].packages[''].version = version;
+  jsonValues[2].version = version;
+
+  const cargoPath = path.join(workspace, 'src-tauri/Cargo.toml');
+  const cargoLockPath = path.join(workspace, 'src-tauri/Cargo.lock');
+  const cargoToml = await readFile(cargoPath, 'utf8');
+  const cargoLock = await readFile(cargoLockPath, 'utf8');
+  const nextCargoToml = cargoToml.replace(/(^\[package\][\s\S]*?^version\s*=\s*")[^"]+("\s*$)/m, `$1${version}$2`);
+  const nextCargoLock = cargoLock.replace(
+    /(\[\[package\]\]\r?\nname = "web-profile"\r?\nversion = ")[^"]+("\r?$)/mu,
+    `$1${version}$2`,
+  );
+  const landingPath = path.join(workspace, 'landing/index.html');
+  const landing = await readFile(landingPath, 'utf8');
+  const nextLanding = landing.replace(
+    /(<div class="version" data-release-version="\{\{VERSION\}\}">当前应用版本 v)[^<]+(<\/div>)/u,
+    `$1${version}$2`,
+  );
+  if (nextCargoToml === cargoToml && version !== current) throw new Error('未能更新 Cargo.toml 版本');
+  if (nextCargoLock === cargoLock && version !== current) throw new Error('未能更新 Cargo.lock 版本');
+  if (nextLanding === landing && !landing.includes(`当前应用版本 v${version}</div>`)) throw new Error('未能更新介绍页版本');
+
+  await Promise.all([
+    ...jsonFiles.map((name, index) => writeFile(path.join(workspace, name), `${JSON.stringify(jsonValues[index], null, 2)}\n`, 'utf8')),
+    writeFile(cargoPath, nextCargoToml, 'utf8'),
+    writeFile(cargoLockPath, nextCargoLock, 'utf8'),
+    writeFile(landingPath, nextLanding, 'utf8'),
+  ]);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const current = await readCurrentVersion();
+  await syncVersion(process.env.APP_VERSION ?? incrementPatchVersion(current));
+}

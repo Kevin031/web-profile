@@ -19,6 +19,12 @@
     "build:portable:desktop": "npm run build:portable && node scripts/create-portable-shortcut.mjs",
     "build:portable:tauri": "npm run build:portable",
     "dist:tauri": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-tauri-portable.ps1",
+    "package:release": "node scripts/package-release.mjs download",
+    "package:site": "node scripts/package-release.mjs site",
+    "test:release": "node --test scripts/*.test.mjs",
+    "prerelease:omni": "npm run test:release && npm run typecheck",
+    "release:omni": "node scripts/release-omni.mjs",
+    "publish:omni": "node scripts/build-and-release.mjs",
     "start": "npm run dev",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -43,7 +49,9 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@baioo-zc/omni-link-mcp": "^0.2.0",
     "@eslint/js": "^9.39.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.7",

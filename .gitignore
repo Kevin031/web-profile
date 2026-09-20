@@ -8,3 +8,5 @@ coverage/
 .superpowers/
 *.log
 web-profile.config.json
+release.local.json
+release.local.json.tmp

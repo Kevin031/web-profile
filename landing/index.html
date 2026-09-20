@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Web Profile 是面向 Windows 的本机前端项目启动器，集中管理启动、Git 状态和开发工具入口。" />
+    <title>Web Profile - 前端项目启动器</title>
+    <link rel="icon" href="./assets/app-icon.svg" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1d1d1f;
+        --muted: #6e6e73;
+        --line: #d2d2d7;
+        --soft: #f5f5f7;
+        --blue: #0071e3;
+        --green: #25a45a;
+        --max: 1180px;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        overflow-x: hidden;
+        color: var(--ink);
+        background: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: inherit; text-decoration: none; }
+      button, a { -webkit-tap-highlight-color: transparent; }
+      img { display: block; max-width: 100%; }
+      figure { margin: 0; }
+
+      .nav {
+        position: sticky;
+        z-index: 20;
+        top: 0;
+        height: 52px;
+        border-bottom: 1px solid rgb(0 0 0 / 8%);
+        background: rgb(255 255 255 / 88%);
+        backdrop-filter: saturate(180%) blur(20px);
+      }
+      .nav-inner {
+        display: flex;
+        width: min(calc(100% - 40px), var(--max));
+        height: 100%;
+        margin: auto;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 650; }
+      .brand img { width: 24px; height: 24px; border-radius: 6px; }
+      .nav-links { display: flex; align-items: center; gap: 26px; color: #424245; font-size: 12px; }
+      .nav-download { color: var(--blue); font-weight: 600; }
+
+      .hero {
+        display: flex;
+        min-height: 740px;
+        height: calc(100vh - 88px);
+        max-height: 840px;
+        overflow: hidden;
+        align-items: center;
+        background: var(--soft);
+      }
+      .hero-inner {
+        width: min(calc(100% - 40px), 1320px);
+        margin: auto;
+        padding: 76px 0 34px;
+        text-align: center;
+      }
+      .eyebrow { margin: 0 0 14px; color: var(--blue); font-size: 18px; font-weight: 650; }
+      h1 {
+        max-width: 950px;
+        margin: 0 auto;
+        font-size: clamp(48px, 6.6vw, 92px);
+        line-height: .96;
+        letter-spacing: 0;
+      }
+      .hero-copy {
+        max-width: 680px;
+        margin: 24px auto 28px;
+        color: var(--muted);
+        font-size: clamp(18px, 2vw, 24px);
+        line-height: 1.45;
+      }
+      .actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+      .button {
+        display: inline-flex;
+        min-height: 44px;
+        padding: 0 20px;
+        border: 1px solid var(--blue);
+        border-radius: 22px;
+        align-items: center;
+        justify-content: center;
+        color: var(--blue);
+        font-size: 15px;
+        font-weight: 600;
+        transition: background .18s ease, color .18s ease, transform .18s ease;
+      }
+      .button:hover { transform: translateY(-1px); background: #eaf4ff; }
+      .button.primary { color: #fff; background: var(--blue); }
+      .button.primary:hover { background: #0077ed; }
+      .hero-shot {
+        position: relative;
+        width: min(82vw, 900px);
+        margin: 44px auto 0;
+        overflow: hidden;
+        border: 1px solid rgb(0 0 0 / 18%);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 32px 70px rgb(0 0 0 / 16%);
+      }
+      .hero-shot::before {
+        display: block;
+        height: 28px;
+        border-bottom: 1px solid #ddd;
+        background: #f6f6f6;
+        content: "";
+      }
+      .traffic-lights { position: absolute; top: 10px; left: 12px; display: flex; gap: 6px; }
+      .traffic-lights i { width: 8px; height: 8px; border-radius: 50%; background: #ff5f57; }
+      .traffic-lights i:nth-child(2) { background: #febc2e; }
+      .traffic-lights i:nth-child(3) { background: #28c840; }
+
+      .section { padding: 128px 0; }
+      .section.soft { background: var(--soft); }
+      .section.dark { color: #f5f5f7; background: #101012; }
+      .section-inner { width: min(calc(100% - 40px), var(--max)); margin: auto; }
+      .section-kicker { margin: 0 0 14px; color: var(--green); font-size: 17px; font-weight: 650; }
+      h2 { max-width: 880px; margin: 0; font-size: clamp(38px, 5vw, 68px); line-height: 1.04; letter-spacing: 0; }
+      .lead { max-width: 710px; margin: 24px 0 0; color: var(--muted); font-size: 21px; line-height: 1.5; }
+
+      .feature-grid {
+        display: grid;
+        margin-top: 82px;
+        border-top: 1px solid var(--line);
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .feature {
+        min-height: 250px;
+        padding: 36px 36px 30px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .feature:nth-child(3n+2), .feature:nth-child(3n+3) { padding-left: 36px; border-left: 1px solid var(--line); }
+      .feature-number { color: var(--blue); font-size: 13px; font-weight: 700; }
+      .feature h3 { margin: 44px 0 12px; font-size: 25px; letter-spacing: 0; }
+      .feature p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
+
+      .gallery { display: grid; margin-top: 76px; gap: 72px; }
+      .shot-block { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, .55fr); gap: 48px; align-items: center; }
+      .shot-block.reverse { grid-template-columns: minmax(240px, .55fr) minmax(0, 1.6fr); }
+      .shot-block.reverse .shot-copy { order: -1; }
+      .shot-frame { overflow: hidden; border: 1px solid #c7c7cc; border-radius: 8px; box-shadow: 0 28px 60px rgb(0 0 0 / 12%); }
+      .shot-copy strong { display: block; margin-bottom: 14px; font-size: 29px; line-height: 1.15; }
+      .shot-copy p { margin: 0; color: var(--muted); font-size: 17px; line-height: 1.55; }
+
+      .download-head { display: flex; justify-content: space-between; gap: 40px; align-items: end; }
+      .download-head .lead { color: #a1a1a6; }
+      .version { flex: 0 0 auto; color: #a1a1a6; font-size: 14px; }
+      .download-list { margin-top: 68px; border-top: 1px solid #3a3a3c; }
+      .download-row {
+        display: grid;
+        min-height: 130px;
+        padding: 28px 0;
+        border-bottom: 1px solid #3a3a3c;
+        grid-template-columns: 1fr auto;
+        gap: 30px;
+        align-items: center;
+      }
+      .download-row h3 { margin: 0 0 7px; font-size: 24px; }
+      .download-row p { margin: 0; color: #a1a1a6; line-height: 1.5; }
+      .download-row .button { min-width: 132px; }
+      .requirements { margin-top: 26px; color: #86868b; font-size: 13px; line-height: 1.6; }
+
+      footer { padding: 30px 0; color: #6e6e73; background: #f5f5f7; font-size: 12px; }
+      .footer-inner { display: flex; width: min(calc(100% - 40px), var(--max)); margin: auto; justify-content: space-between; gap: 24px; }
+
+      .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+      .reveal.visible { opacity: 1; transform: none; }
+      @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .reveal { opacity: 1; transform: none; transition: none; } }
+
+      @media (max-width: 820px) {
+        .nav-links a:not(.nav-download) { display: none; }
+        .hero { height: auto; max-height: none; }
+        .hero-inner { padding-top: 58px; }
+        .hero-shot { margin-top: 42px; }
+        .section { padding: 92px 0; }
+        .feature-grid { grid-template-columns: 1fr; margin-top: 58px; }
+        .feature, .feature:nth-child(3n+2), .feature:nth-child(3n+3) { min-height: auto; padding: 30px 0; border-left: 0; }
+        .feature h3 { margin-top: 26px; }
+        .shot-block, .shot-block.reverse { grid-template-columns: 1fr; gap: 28px; }
+        .shot-block.reverse .shot-copy { order: 0; }
+        .download-head { display: block; }
+        .version { margin-top: 24px; }
+      }
+      @media (max-width: 520px) {
+        .hero { min-height: auto; }
+        h1 { font-size: 42px; }
+        .hero-copy { font-size: 18px; }
+        .hero-shot { width: calc(100% + 32px); margin-left: -16px; border-radius: 0; }
+        .download-row { grid-template-columns: 1fr; }
+        .download-row .button { justify-self: start; }
+        .footer-inner { display: block; }
+        .footer-inner span { display: block; margin-top: 6px; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav" aria-label="主导航">
+      <div class="nav-inner">
+        <a class="brand" href="#top"><img src="./assets/app-icon.svg" alt="" />Web Profile</a>
+        <div class="nav-links">
+          <a href="#features">功能</a>
+          <a href="#screenshots">界面</a>
+          <a class="nav-download" href="#download">下载</a>
+        </div>
+      </div>
+    </nav>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Web Profile</p>
+          <h1>你的前端项目，<br />一处就绪。</h1>
+          <p class="hero-copy">扫描、启动、访问、查看 Git 状态。把散落在终端和文件夹里的日常操作，收进一个本机工作台。</p>
+          <div class="actions">
+            <a class="button primary" href="#download">下载 Windows 版</a>
+            <a class="button" href="#features">进一步了解</a>
+          </div>
+          <div class="hero-shot reveal">
+            <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+            <img src="./assets/app-overview.png" alt="Web Profile 项目工作台，展示项目列表、Git 状态和项目详情" />
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="section-inner">
+          <p class="section-kicker">少切换，多专注。</p>
+          <h2>从打开项目，到进入开发状态，只差一次点击。</h2>
+          <p class="lead">Web Profile 读取本机项目元数据，把最常用的开发动作放在同一界面。没有云端同步，也没有额外账号。</p>
+          <div class="feature-grid">
+            <article class="feature reveal"><span class="feature-number">01</span><h3>项目集中管理</h3><p>扫描指定目录，通过搜索、收藏、运行状态和工作区改动快速筛选项目。</p></article>
+            <article class="feature reveal"><span class="feature-number">02</span><h3>一键启动与停止</h3><p>保存每个项目的启动命令，自动识别本地访问地址，也能一次停止所有进程。</p></article>
+            <article class="feature reveal"><span class="feature-number">03</span><h3>脚本自动识别</h3><p>读取 package.json 和锁文件，识别 npm、pnpm、yarn 或 bun，并列出可运行脚本。</p></article>
+            <article class="feature reveal"><span class="feature-number">04</span><h3>Git 状态一眼可见</h3><p>集中显示分支、未提交修改及 ahead/behind 信息，支持切换分支与 Pull。</p></article>
+            <article class="feature reveal"><span class="feature-number">05</span><h3>常用工具直接打开</h3><p>从同一入口使用资源管理器、VS Code、Cursor 或终端打开项目。</p></article>
+            <article class="feature reveal"><span class="feature-number">06</span><h3>日志留在上下文中</h3><p>启动命令、标准输出、错误信息和进程状态都跟随当前项目展示。</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft" id="screenshots">
+        <div class="section-inner">
+          <p class="section-kicker">一览无余。</p>
+          <h2>项目、状态和操作，保持在视线之内。</h2>
+          <div class="gallery">
+            <figure class="shot-block reveal">
+              <div class="shot-frame"><img src="./assets/app-overview.png" alt="Web Profile 宽屏项目总览" loading="lazy" /></div>
+              <figcaption class="shot-copy"><strong>全局总览</strong><p>表格视图同时呈现项目路径、当前分支、Git 状态、启动命令与操作入口。</p></figcaption>
+            </figure>
+            <figure class="shot-block reverse reveal">
+              <div class="shot-frame"><img src="./assets/app-compact.png" alt="Web Profile 紧凑布局中的项目详情和日志" loading="lazy" /></div>
+              <figcaption class="shot-copy"><strong>细节随项目展开</strong><p>在紧凑窗口中，状态、脚本、分支与日志自然移到下方，不丢失操作上下文。</p></figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section dark" id="download">
+        <div class="section-inner">
+          <div class="download-head">
+            <div><p class="section-kicker">现在开始。</p><h2>下载 Web Profile。</h2><p class="lead">适用于 Windows 10/11 x64。项目、配置和运行日志保留在你的电脑上。</p></div>
+            <div class="version" data-release-version="{{VERSION}}">当前应用版本 v0.1.14</div>
+          </div>
+          <div class="download-list">
+            <div class="download-row">
+              <div><h3>Windows 安装包</h3><p>ZIP 内包含标准安装版与免安装便携版，下载后解压即可选择使用。</p></div>
+              <a class="button primary" href="../dist/web-profile-windows-x64.zip" data-release-href="{{DOWNLOAD_URL}}" download>下载 ZIP</a>
+            </div>
+          </div>
+          <p class="requirements">运行要求：Windows 10/11 x64、Git、Node.js，以及项目所使用的 npm、pnpm、yarn 或 bun。便携版要求系统已安装 Microsoft Edge WebView2 Runtime。</p>
+        </div>
+      </section>
+    </main>
+
+    <footer><div class="footer-inner"><div>Web Profile · 本机前端项目启动器</div><span>基于 Tauri 2、React 19 与 Vite</span></div></footer>
+
+    <script>
+      const observer = new IntersectionObserver(
+        (entries) => entries.forEach((entry) => entry.isIntersecting && entry.target.classList.add('visible')),
+        { threshold: 0.12 }
+      );
+      document.querySelectorAll('.reveal').forEach((element) => observer.observe(element));
+    </script>
+  </body>
+</html>

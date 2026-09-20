@@ -174,6 +174,25 @@ Additional requirements for building on Windows: Rust stable MSVC, Visual Studio
 
 ## Build & release
 
+### Publish the landing page and Windows download through Omni Link
+
+The release uses two fixed Omni Link entries: one keeps the Windows ZIP as a download, while the other extracts the landing-page ZIP as a static site. The first run uses company SSO and stores both release IDs and share URLs in the ignored `release.local.json`; later runs update those entries in place so their URLs remain stable.
+
+```powershell
+# Build dist/web-profile-windows-x64.zip without uploading
+npm run package:release
+
+# Validate, package, and update both Omni Link entries
+npm run release:omni
+
+# Prompt for a version, build installer + portable app, then publish
+npm run publish:omni
+```
+
+The download ZIP contains the standard installer and portable build. The landing-page package is `dist/web-profile-site.zip`; packaging replaces its download button URL with the separate Omni Link download entry. The command prints both share URLs when it finishes.
+
+`publish:omni` shows the current version and requires an explicit `x.y.z` version. It permits republishing the same version but rejects downgrades, synchronizes npm/Tauri/Cargo/landing versions, runs tests, type checking, and ESLint, builds both Windows packages, then updates the two Omni Link entries. It bypasses the automatic patch bump in `prebuild`.
+
 > `build`, `build:portable`, and `build:portable:desktop` bump the patch version in `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` before building. Do not use them for side-effect-free verification.
 
 | Command | Output |

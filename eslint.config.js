@@ -6,6 +6,16 @@ export default tseslint.config(
     ignores: ['dist/**', 'dist-renderer/**', 'release/**', 'src-tauri/target/**', 'node_modules/**', 'coverage/**']
   },
   js.configs.recommended,
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        URL: 'readonly'
+      }
+    }
+  },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],
